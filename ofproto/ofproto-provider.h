@@ -70,7 +70,7 @@ struct smap;
 
 extern struct ovs_mutex ofproto_mutex;
 
-/* An OpenFlow switch.
+/* An OpenFlow switch. 代表一个openflow switch，其更上一层结构是struct bridge
  *
  * With few exceptions, ofproto implementations may look at these fields but
  * should not modify them. */
@@ -103,7 +103,7 @@ struct ofproto {
 
     /* Flow tables. */
     long long int eviction_group_timer; /* For rate limited reheapification. */
-    struct oftable *tables;
+    struct oftable *tables; //最多256个tables
     int n_tables;
     ovs_version_t tables_version;  /* Controls which rules are visible to
                                     * table lookups. */
@@ -219,7 +219,7 @@ enum oftable_flags {
  * Refer to the thread-safety notes on struct rule for more information.*/
 struct oftable {
     enum oftable_flags flags;
-    struct classifier cls;      /* Contains "struct rule"s. */
+    struct classifier cls;      /* Contains "struct rule"s. */ //指向分类器，分类器中就保存了流表
     char *name;                 /* Table name exposed via OpenFlow, or NULL. */
     int name_level;             /* 0=name unset, 1=via OF, 2=via OVSDB. */
 
@@ -357,12 +357,13 @@ enum OVS_PACKED_ENUM rule_state {
                        * removed from the classifier as well. */
 };
 
+//表示流表
 struct rule {
     /* Where this rule resides in an OpenFlow switch.
      *
      * These are immutable once the rule is constructed, hence 'const'. */
     struct ofproto *const ofproto; /* The ofproto that contains this rule. */
-    const struct cls_rule cr;      /* In owning ofproto's classifier. */
+    const struct cls_rule cr;      /* In owning ofproto's classifier. */ //包含流表优先级和匹配域
     const uint8_t table_id;        /* Index in ofproto's 'tables' array. */
 
     enum rule_state state;
@@ -409,7 +410,7 @@ struct rule {
 
     /* OpenFlow actions.  See struct rule_actions for more thread-safety
      * notes. */
-    const struct rule_actions * const actions;
+    const struct rule_actions * const actions; //actions
 
     /* In owning meter's 'rules' list.  An empty list if there is no meter. */
     struct ovs_list meter_list_node OVS_GUARDED_BY(ofproto_mutex);

@@ -2077,6 +2077,7 @@ do_add_port(struct dp_netdev *dp, const char *devname, const char *type,
     return 0;
 }
 
+//这里面会启动pmd转发线程的
 static int
 dpif_netdev_port_add(struct dpif *dpif, struct netdev *netdev,
                      odp_port_t *port_nop)
@@ -4696,7 +4697,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         qlen_p = &rem_qlen;
     }
 
-    error = netdev_rxq_recv(rxq->rx, &batch, qlen_p);
+    error = netdev_rxq_recv(rxq->rx, &batch, qlen_p); //尝试接收报文
     if (!error) {
         /* At least one packet received. */
         *recirc_depth_get() = 0;
@@ -4718,7 +4719,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         /* Process packet batch. */
         int ret = pmd->netdev_input_func(pmd, &batch, port_no);
         if (ret) {
-            dp_netdev_input(pmd, &batch, port_no);
+            dp_netdev_input(pmd, &batch, port_no); //将报文传输给flow
         }
 
         /* Assign processing cycles to rx queue. */
@@ -6161,7 +6162,7 @@ pmd_thread_main(void *f_)
     /* Stores the pmd thread's 'pmd' to 'per_pmd_key'. */
     ovsthread_setspecific(pmd->dp->per_pmd_key, pmd);
     ovs_numa_thread_setaffinity_core(pmd->core_id);
-    dpdk_set_lcore_id(pmd->core_id);
+    dpdk_set_lcore_id(pmd->core_id); //设置线程绑定的lcore
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
     pmd_alloc_static_tx_qid(pmd);
@@ -6226,7 +6227,7 @@ reload:
             }
 
             process_packets =
-                dp_netdev_process_rxq_port(pmd, poll_list[i].rxq,
+                dp_netdev_process_rxq_port(pmd, poll_list[i].rxq, //for循环各个dpdk port，进行处理, 注意循环中间可能会根据配置信息的变化重新加载端口和队列信息
                                            poll_list[i].port_no);
             rx_packets += process_packets;
         }
@@ -7722,7 +7723,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     }
 
     for (i = 0; i < n_batches; i++) {
-        packet_batch_per_flow_execute(&batches[i], pmd);
+        packet_batch_per_flow_execute(&batches[i], pmd); //执行action
     }
 }
 

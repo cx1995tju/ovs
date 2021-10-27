@@ -184,6 +184,7 @@ enum {
  *       originate from OpenFlow, then setting 'raw' to zero should be fine:
  *       code to translate the ofpact to OpenFlow must tolerate this case.)
  */
+//表示具体的action，type指定类别 %OUTPUT
 struct ofpact {
     /* We want the space advantage of an 8-bit type here on every
      * implementation, without giving up the advantage of having a useful type

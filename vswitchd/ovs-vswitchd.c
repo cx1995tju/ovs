@@ -79,16 +79,16 @@ main(int argc, char *argv[])
     struct ovs_vswitchd_exit_args exit_args = {&exiting, &cleanup};
     int retval;
 
-    set_program_name(argv[0]);
+    set_program_name(argv[0]); //设置程序名称，版本，编译日期等
     ovsthread_id_init();
 
     dns_resolve_init(true);
     ovs_cmdl_proctitle_init(argc, argv);
-    service_start(&argc, &argv);
+    service_start(&argc, &argv); //注册回调函数和服务管理器出现故障错误时操作的配置
     remote = parse_options(argc, argv, &unixctl_path);
     fatal_ignore_sigpipe();
 
-    daemonize_start(true);
+    daemonize_start(true); //daemonization
 
     if (want_mlockall) {
 #ifdef HAVE_MLOCKALL
@@ -102,20 +102,20 @@ main(int argc, char *argv[])
 #endif
     }
 
-    retval = unixctl_server_create(unixctl_path, &unixctl);
+    retval = unixctl_server_create(unixctl_path, &unixctl); //ovs-appctl 通道
     if (retval) {
         exit(EXIT_FAILURE);
     }
     unixctl_command_register("exit", "[--cleanup]", 0, 1,
                              ovs_vswitchd_exit, &exit_args);
 
-    bridge_init(remote);
+    bridge_init(remote); //从remote数据库获取配置信息，并初始化bridge
     free(remote);
 
     exiting = false;
     cleanup = false;
-    while (!exiting) {
-        memory_run();
+    while (!exiting) { //核心主循环
+        memory_run(); //内存监视器
         if (memory_should_report()) {
             struct simap usage;
 
@@ -124,9 +124,9 @@ main(int argc, char *argv[])
             memory_report(&usage);
             simap_destroy(&usage);
         }
-        bridge_run();
-        unixctl_server_run(unixctl);
-        netdev_run();
+        bridge_run(); //处理controller的交互, ovs-ofctl命令
+        unixctl_server_run(unixctl); 
+        netdev_run(); //虚拟网卡的初始化, 监控网卡状态并更新
 
         memory_wait();
         bridge_wait();
@@ -135,7 +135,7 @@ main(int argc, char *argv[])
         if (exiting) {
             poll_immediate_wake();
         }
-        poll_block();
+        poll_block(); //没有请求的时候，阻塞在这里
         if (should_service_stop()) {
             exiting = true;
         }

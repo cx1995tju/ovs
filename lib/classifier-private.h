@@ -26,6 +26,7 @@
 /* Classifier internal definitions, subject to change at any time. */
 
 /* A set of rules that all have the same fields wildcarded. */
+//具有相同mask的流表集合
 struct cls_subtable {
     struct cmap_node cmap_node;    /* Within classifier's 'subtables_map'. */
 

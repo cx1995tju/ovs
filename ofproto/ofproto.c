@@ -337,7 +337,7 @@ ofproto_init(const struct shash *iface_hints)
     struct shash_node *node;
     size_t i;
 
-    ofproto_class_register(&ofproto_dpif_class);
+    ofproto_class_register(&ofproto_dpif_class); //首先注册ofproto_dpif_class，这是ofproto-dpif的默认且唯一实现
 
     /* Make a local copy, since we don't own 'iface_hints' elements. */
     SHASH_FOR_EACH(node, iface_hints) {
@@ -352,7 +352,7 @@ ofproto_init(const struct shash *iface_hints)
         shash_add(&init_ofp_ports, node->name, new_hint);
     }
 
-    for (i = 0; i < n_ofproto_classes; i++) {
+    for (i = 0; i < n_ofproto_classes; i++) { //对注册ofproto_classes 调用init函数  ofproto_dpif_class
         ofproto_classes[i]->init(&init_ofp_ports);
     }
 
@@ -1765,7 +1765,7 @@ ofproto_type_run(const char *datapath_type)
     datapath_type = ofproto_normalize_type(datapath_type);
     class = ofproto_class_find__(datapath_type);
 
-    error = class->type_run ? class->type_run(datapath_type) : 0;
+    error = class->type_run ? class->type_run(datapath_type) : 0; //调用具体的class的type_run函数
     if (error && error != EAGAIN) {
         VLOG_ERR_RL(&rl, "%s: type_run failed (%s)",
                     datapath_type, ovs_strerror(error));

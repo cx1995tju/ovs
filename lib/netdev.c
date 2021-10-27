@@ -183,7 +183,7 @@ netdev_run(void)
     struct netdev_registered_class *rc;
     CMAP_FOR_EACH (rc, cmap_node, &netdev_classes) {
         if (rc->class->run) {
-            rc->class->run(rc->class);
+            rc->class->run(rc->class); //%dpdk_class netdev_linux_class netdev_tap_class , 这都是各种netdev的provider, ovs-dpdk场景，run函数为空，其pmd线程的启动是在dpif_netdev_port_add的时候，然后轮询模式来处理报文，不是中断
         }
     }
 }
@@ -724,7 +724,7 @@ netdev_rxq_recv(struct netdev_rxq *rx, struct dp_packet_batch *batch,
 {
     int retval;
 
-    retval = rx->netdev->netdev_class->rxq_recv(rx, batch, qfill);
+    retval = rx->netdev->netdev_class->rxq_recv(rx, batch, qfill); //%netdev_dpdk_vhost_rxq_recv %netdev_dpdk_rxq_recv
     if (!retval) {
         COVERAGE_INC(netdev_received);
     } else {

@@ -284,9 +284,9 @@ init(const struct shash *iface_hints)
         shash_add(&init_ofp_ports, node->name, new_hint);
     }
 
-    ofproto_unixctl_init();
+    ofproto_unixctl_init(); //注册了一些ovs-appctl的命令参数
     ofproto_dpif_trace_init();
-    udpif_init();
+    udpif_init(); //upcall相关
 }
 
 static void
@@ -355,6 +355,7 @@ lookup_ofproto_dpif_by_port_name(const char *name)
     return NULL;
 }
 
+//主要是启动一些handlers线程，处理来自内核datapath的消息
 static int
 type_run(const char *type)
 {

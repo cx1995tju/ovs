@@ -287,7 +287,7 @@ struct dpif_backer {
 extern struct shash all_dpif_backers;
 
 struct ofport_dpif *odp_port_to_ofport(const struct dpif_backer *, odp_port_t);
-
+
 /* A bridge based on a "dpif" datapath. */
 
 struct ofproto_dpif {
@@ -298,7 +298,7 @@ struct ofproto_dpif {
     struct hmap_node all_ofproto_dpifs_by_uuid_node;
 
     struct ofproto up;
-    struct dpif_backer *backer;
+    struct dpif_backer *backer; //通过这个索引到dpif，进而索引到dpif_netlink dpif_netdev
 
     /* Unique identifier for this instantiation of this bridge in this running
      * process.  */

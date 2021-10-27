@@ -82,7 +82,7 @@ struct vport_portids {
  */
 struct vport {
 	struct net_device *dev;
-	struct datapath	*dp;
+	struct datapath	*dp; //所属的datapath
 	struct vport_portids __rcu *upcall_portids;
 	u16 port_no;
 

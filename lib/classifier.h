@@ -331,8 +331,9 @@ enum {
 };
 
 /* A flow classifier. */
+//一个分类器，本质就是流表匹配 + 动作的实施者
 struct classifier {
-    int n_rules;                    /* Total number of rules. */
+    int n_rules;                    /* Total number of rules. */ //流表数目
     uint8_t n_flow_segments;
     uint8_t flow_segments[CLS_MAX_INDICES]; /* Flow segment boundaries to use
                                              * for staged lookup. */

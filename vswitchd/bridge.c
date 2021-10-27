@@ -429,11 +429,12 @@ if_notifier_changed(struct if_notifier *notifier OVS_UNUSED)
 /* Initializes the bridge module, configuring it to obtain its configuration
  * from an OVSDB server accessed over 'remote', which should be a string in a
  * form acceptable to ovsdb_idl_create(). */
+//初始化bridge模块, 主要是丽娜姐数据库ovsdb
 void
 bridge_init(const char *remote)
 {
     /* Create connection to database. */
-    idl = ovsdb_idl_create(remote, &ovsrec_idl_class, true, true);
+    idl = ovsdb_idl_create(remote, &ovsrec_idl_class, true, true); //连接ovsdb数据库
     idl_seqno = ovsdb_idl_get_seqno(idl);
     ovsdb_idl_set_lock(idl, "ovs_vswitchd");
     ovsdb_idl_verify_write_only(idl);
@@ -812,6 +813,8 @@ datapath_reconfigure(const struct ovsrec_open_vswitch *cfg)
     }
 }
 
+//vswitchd启动后，bridge模块需要经过reconfigure使实际生效的配置与数据库中保持一致
+//第一次配置的时候，也是这个函数
 static void
 bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 {
@@ -845,8 +848,8 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      *
      * This is mostly an update to bridge data structures. Nothing is pushed
      * down to ofproto or lower layers. */
-    add_del_bridges(ovs_cfg);
-    HMAP_FOR_EACH (br, node, &all_bridges) {
+    add_del_bridges(ovs_cfg); //根据数据库的配置，增加删除bridge
+    HMAP_FOR_EACH (br, node, &all_bridges) { //便利每个bridge处理port的增删
         bridge_collect_wanted_ports(br, &br->wanted_ports);
         bridge_del_ports(br, &br->wanted_ports);
     }
@@ -863,7 +866,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * We have to do all the deletions before we can do any additions, because
      * the ports to be added might require resources that will be freed up by
      * deletions (they might especially overlap in name). */
-    bridge_delete_ofprotos();
+    bridge_delete_ofprotos(); //删除多余的ofproto, 如果ofproto没有对应的bridge或者他们的type补一张，那么就删除
     HMAP_FOR_EACH (br, node, &all_bridges) {
         if (br->ofproto) {
             bridge_delete_or_reconfigure_ports(br);
@@ -879,7 +882,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
         if (!br->ofproto) {
             int error;
 
-            error = ofproto_create(br->name, br->type, &br->ofproto);
+            error = ofproto_create(br->name, br->type, &br->ofproto); //是不是又要创建一个openflow交换机, 创建缺少的ofproto
             if (error) {
                 VLOG_ERR("failed to create bridge %s: %s", br->name,
                          ovs_strerror(error));
@@ -894,7 +897,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
     config_ofproto_types(&ovs_cfg->other_config);
 
-    HMAP_FOR_EACH (br, node, &all_bridges) {
+    HMAP_FOR_EACH (br, node, &all_bridges) { //给每个网桥添加port
         bridge_add_ports(br, &br->wanted_ports);
         shash_destroy(&br->wanted_ports);
     }
@@ -928,7 +931,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
                                      &iface->cfg->bfd);
                 ofproto_port_set_lldp(br->ofproto, iface->ofp_port,
                                       &iface->cfg->lldp);
-                ofproto_port_set_config(br->ofproto, iface->ofp_port,
+                ofproto_port_set_config(br->ofproto, iface->ofp_port, //是不是要设置一些config
                                         &iface->cfg->other_config);
             }
         }
@@ -953,7 +956,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * client that reconfiguration is complete, otherwise there is a very
      * narrow race window in which e.g. ofproto/trace will not recognize the
      * new configuration (sometimes this causes unit test failures). */
-    bridge_run__();
+    bridge_run__();A //重新配置后，就run起来
 }
 
 /* Delete ofprotos which aren't configured or have the wrong type.  Create
@@ -1179,6 +1182,7 @@ bridge_add_ports(struct bridge *br, const struct shash *wanted_ports)
 {
     /* First add interfaces that request a particular port number. */
     bridge_add_ports__(br, wanted_ports, true);
+    //->iface_create -> iface_do_create -> ofproto_port_add -> (ofproto->ofproto_class->port_add) %dpif_netdev_port_add,  %dpif_netlink_port_add
 
     /* Then add interfaces that want automatic port number assignment.
      * We add these afterward to avoid accidentally taking a specifically
@@ -3242,15 +3246,17 @@ bridge_run__(void)
     sset_init(&types);
     ofproto_enumerate_types(&types);
     SSET_FOR_EACH (type, &types) {
-        ofproto_type_run(type);
+        ofproto_type_run(type); 
     }
     sset_destroy(&types);
 
     /* Let each bridge do the work that it needs to do. */
-    HMAP_FOR_EACH (br, node, &all_bridges) {
-        ofproto_run(br->ofproto);
+    HMAP_FOR_EACH (br, node, &all_bridges) { //对于每个ofproto都调用ofproto_run
+        ofproto_run(br->ofproto);//ofproto_run中的p->ofproto_class->run(p)上的run函数依次调用 %dpif_run() 处理所有注册的netlink notifier汇报事件，run_fast处理常见的周期事件，包括upcalls的处理 %dpif_netdev_run
     }
 }
+
+//网络包的完整处理过程，包括必要的配置更新，在配置更新的时候会从数据库读取配置信息，生成必要的dridge和dp等数据结构
 
 void
 bridge_run(void)
@@ -3258,9 +3264,9 @@ bridge_run(void)
     static struct ovsrec_open_vswitch null_cfg;
     const struct ovsrec_open_vswitch *cfg;
 
-    ovsrec_open_vswitch_init(&null_cfg);
+    ovsrec_open_vswitch_init(&null_cfg); //首先读取ovsdb的配置信息，其中包含了用户创建了多少bridge，每个bridge有多少个port，iface等信息
 
-    ovsdb_idl_run(idl);
+    ovsdb_idl_run(idl); //处理一批从IDL数据库服务器的消息
 
     if_notifier_run();
 
@@ -3298,7 +3304,7 @@ bridge_run(void)
      * it must be done after the configuration is set.  If the
      * initialization has already occurred, bridge_init_ofproto()
      * returns immediately. */
-    bridge_init_ofproto(cfg);
+    bridge_init_ofproto(cfg); //初始化ofproto库
 
     /* Once the value of flow-restore-wait is false, we no longer should
      * check its value from the database. */
@@ -3307,7 +3313,7 @@ bridge_run(void)
                                         "flow-restore-wait", false));
     }
 
-    bridge_run__();
+    bridge_run__();  //核心中的核心, ovs-ofctl 下发openflow也是在这里处理
 
     /* Re-configure SSL.  We do this on every trip through the main loop,
      * instead of just when the database changes, because the contents of the
@@ -3328,7 +3334,7 @@ bridge_run(void)
 
         idl_seqno = ovsdb_idl_get_seqno(idl);
         txn = ovsdb_idl_txn_create(idl);
-        bridge_reconfigure(cfg ? cfg : &null_cfg);
+        bridge_reconfigure(cfg ? cfg : &null_cfg); //这里需要根据数据库的配置，可能做一些reconfgiure, cfg就是数据库配置, 主要是做控制面的配置等操作
 
         if (cfg) {
             ovsrec_open_vswitch_set_cur_cfg(cfg, cfg->next_cfg);
