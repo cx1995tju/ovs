@@ -732,7 +732,7 @@ DECL_OFPROTO_COLLECTION (struct ofgroup *, group)
  * EAGAIN (or EWOULDBLOCK or EINPROGRESS) only where the function descriptions
  * explicitly say those errors are a possibility.  We may relax this
  * requirement in the future if and when we encounter performance problems. */
-struct ofproto_class {
+struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
 /* ## ----------------- ## */
 /* ## Factory Functions ## */
 /* ## ----------------- ## */

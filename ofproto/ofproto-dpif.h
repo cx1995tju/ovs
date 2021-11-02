@@ -240,10 +240,12 @@ enum revalidate_reason {
 };
 
 /* All datapaths of a given type share a single dpif backer instance. */
+//system netdev 两种datapath对应两个backer, 保存在全局变量all_dpif_backers, 通过type可以索引到
+//refer to open_dpif_backer
 struct dpif_backer {
     char *type;
     int refcount;
-    struct dpif *dpif;
+    struct dpif *dpif; //通过这个间接索引到dpif_class, %dpif_netdev_class 
     struct udpif *udpif;
 
     struct ovs_rwlock odp_to_ofport_lock;

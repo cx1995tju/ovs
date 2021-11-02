@@ -126,7 +126,7 @@ main(int argc, char *argv[])
         }
         bridge_run(); //处理controller的交互, ovs-ofctl命令
         unixctl_server_run(unixctl); 
-        netdev_run(); //虚拟网卡的初始化, 监控网卡状态并更新
+        netdev_run(); //虚拟网卡的初始化, 监控网卡状态并更新, 譬如其他控制面更新了一些网卡的信息，会修改change_seq的，这里就能检测到，做具体操作netdev.change_seq %netdev_change_seq_changed 
 
         memory_wait();
         bridge_wait();

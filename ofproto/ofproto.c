@@ -352,7 +352,7 @@ ofproto_init(const struct shash *iface_hints)
         shash_add(&init_ofp_ports, node->name, new_hint);
     }
 
-    for (i = 0; i < n_ofproto_classes; i++) { //对注册ofproto_classes 调用init函数  ofproto_dpif_class
+    for (i = 0; i < n_ofproto_classes; i++) { //对注册ofproto_classes 调用init函数  即ofproto_dpif_class init函数
         ofproto_classes[i]->init(&init_ofp_ports);
     }
 
@@ -438,7 +438,7 @@ ofproto_enumerate_types(struct sset *types)
     size_t i;
 
     sset_clear(types);
-    for (i = 0; i < n_ofproto_classes; i++) {
+    for (i = 0; i < n_ofproto_classes; i++) { //目前只有一种ofproto_classes, 即ofproto_dpif_class
         ofproto_classes[i]->enumerate_types(types);
     }
 }
@@ -1762,8 +1762,8 @@ ofproto_type_run(const char *datapath_type)
     const struct ofproto_class *class;
     int error;
 
-    datapath_type = ofproto_normalize_type(datapath_type);
-    class = ofproto_class_find__(datapath_type);
+    datapath_type = ofproto_normalize_type(datapath_type); 
+    class = ofproto_class_find__(datapath_type);//根据datapath_type找ofproto_class, 目前只有一种ofproto_dpif_class
 
     error = class->type_run ? class->type_run(datapath_type) : 0; //调用具体的class的type_run函数
     if (error && error != EAGAIN) {
@@ -1876,7 +1876,7 @@ ofproto_run(struct ofproto *p)
         p->change_seq = new_seq;
     }
 
-    connmgr_run(p->connmgr, handle_openflow);
+    connmgr_run(p->connmgr, handle_openflow); //处理controller snoop等连接
 
     return error;
 }

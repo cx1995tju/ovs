@@ -422,9 +422,9 @@ ovsdb_idl_run(struct ovsdb_idl *idl)
     ovs_assert(!idl->txn);
 
     struct ovs_list events;
-    ovsdb_cs_run(idl->cs, &events);
+    ovsdb_cs_run(idl->cs, &events); //接收数据库事件
 
-    struct ovsdb_cs_event *event;
+    struct ovsdb_cs_event *event; //各种数据库事件的处理
     LIST_FOR_EACH_POP (event, list_node, &events) {
         switch (event->type) {
         case OVSDB_CS_EVENT_TYPE_RECONNECT:

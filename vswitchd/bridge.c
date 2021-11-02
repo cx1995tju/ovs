@@ -375,7 +375,7 @@ bridge_init_ofproto(const struct ovsrec_open_vswitch *cfg)
     shash_init(&iface_hints);
 
     if (cfg) {
-        for (i = 0; i < cfg->n_bridges; i++) {
+        for (i = 0; i < cfg->n_bridges; i++) { //将配置的所有interface插入到iface_hints
             const struct ovsrec_bridge *br_cfg = cfg->bridges[i];
             int j;
 
@@ -434,7 +434,7 @@ void
 bridge_init(const char *remote)
 {
     /* Create connection to database. */
-    idl = ovsdb_idl_create(remote, &ovsrec_idl_class, true, true); //连接ovsdb数据库
+    idl = ovsdb_idl_create(remote, &ovsrec_idl_class, true, true); //创建 连接ovsdb数据库 需要的结构
     idl_seqno = ovsdb_idl_get_seqno(idl);
     ovsdb_idl_set_lock(idl, "ovs_vswitchd");
     ovsdb_idl_verify_write_only(idl);
@@ -523,6 +523,7 @@ bridge_init(const char *remote)
                              1, 2, bridge_unixctl_dump_flows, NULL);
     unixctl_command_register("bridge/reconnect", "[bridge]", 0, 1,
                              bridge_unixctl_reconnect, NULL);
+    //各种各样模块的初始化
     lacp_init();
     bond_init();
     cfm_init();
@@ -825,6 +826,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
     COVERAGE_INC(bridge_reconfigure);
 
+    //设置各种参数
     ofproto_set_flow_limit(smap_get_uint(&ovs_cfg->other_config, "flow-limit",
                                         OFPROTO_FLOW_LIMIT_DEFAULT));
     ofproto_set_max_idle(smap_get_uint(&ovs_cfg->other_config, "max-idle",
@@ -840,7 +842,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
     ofproto_set_bundle_idle_timeout(smap_get_uint(&ovs_cfg->other_config,
                                                  "bundle-idle-timeout", 0));
     ofproto_set_threads(
-        smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0),
+        smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0), //设置线程数目
         smap_get_int(&ovs_cfg->other_config, "n-revalidator-threads", 0));
 
     /* Destroy "struct bridge"s, "struct port"s, and "struct iface"s according
@@ -3244,7 +3246,7 @@ bridge_run__(void)
 
     /* Let each datapath type do the work that it needs to do. */
     sset_init(&types);
-    ofproto_enumerate_types(&types);
+    ofproto_enumerate_types(&types); //获取所有的type，目前只有两种system netdev
     SSET_FOR_EACH (type, &types) {
         ofproto_type_run(type); 
     }
@@ -3256,8 +3258,9 @@ bridge_run__(void)
     }
 }
 
-//网络包的完整处理过程，包括必要的配置更新，在配置更新的时候会从数据库读取配置信息，生成必要的dridge和dp等数据结构
-
+//1. 处理数据库的变更, 譬如：ovs-vsctl 工具的设置, 这里可能修改网络拓扑
+//2. 处理ovs-ofctl
+//3. 与controller关于openflow的交互
 void
 bridge_run(void)
 {
@@ -3295,8 +3298,8 @@ bridge_run(void)
     cfg = ovsrec_open_vswitch_first(idl);
 
     if (cfg) {
-        netdev_set_flow_api_enabled(&cfg->other_config);
-        dpdk_init(&cfg->other_config);
+        netdev_set_flow_api_enabled(&cfg->other_config); //使能硬件offload
+        dpdk_init(&cfg->other_config); //dpdk初始化
         userspace_tso_init(&cfg->other_config);
     }
 
@@ -3304,7 +3307,7 @@ bridge_run(void)
      * it must be done after the configuration is set.  If the
      * initialization has already occurred, bridge_init_ofproto()
      * returns immediately. */
-    bridge_init_ofproto(cfg); //初始化ofproto库
+    bridge_init_ofproto(cfg); //初始化ofproto, 注册ofproto_class
 
     /* Once the value of flow-restore-wait is false, we no longer should
      * check its value from the database. */

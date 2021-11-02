@@ -361,14 +361,14 @@ type_run(const char *type)
 {
     struct dpif_backer *backer;
 
-    backer = shash_find_data(&all_dpif_backers, type);
+    backer = shash_find_data(&all_dpif_backers, type); //根据type从这个全局便利里找backer, system 和 netdev都会创建一个
     if (!backer) {
         /* This is not necessarily a problem, since backers are only
          * created on demand. */
         return 0;
     }
 
-    if (dpif_run(backer->dpif)) {
+    if (dpif_run(backer->dpif)) { //%dpif_netlink_run %dpif_netdev_run , backer能够索引到dpif_class
         backer->need_revalidate = REV_RECONFIGURE;
     }
 
@@ -395,7 +395,7 @@ type_run(const char *type)
         udpif_set_threads(backer->udpif, n_handlers, n_revalidators);
     }
 
-    if (backer->need_revalidate) {
+    if (backer->need_revalidate) { //需要更新配置
         struct ofproto_dpif *ofproto;
         struct simap_node *node;
         struct simap tmp_backers;
@@ -772,7 +772,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     }
     sset_destroy(&names);
 
-    backer = xmalloc(sizeof *backer);
+    backer = xmalloc(sizeof *backer); //创建backer，为每个datapat类型(system netdev)
 
     error = dpif_create_and_open(backer_name, type, &backer->dpif);
     free(backer_name);
@@ -782,7 +782,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
         free(backer);
         return error;
     }
-    backer->udpif = udpif_create(backer, backer->dpif);
+    backer->udpif = udpif_create(backer, backer->dpif); //创建udpif
 
     backer->type = xstrdup(type);
     backer->refcount = 1;

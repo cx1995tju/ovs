@@ -122,6 +122,7 @@ struct revalidator {
  *    - Revalidation threads which read the datapath flow table and maintains
  *      them.
  */
+//refer to open_dpif_backer
 struct udpif {
     struct ovs_list list_node;         /* In all_udpifs list. */
 
@@ -682,14 +683,14 @@ udpif_set_threads(struct udpif *udpif, uint32_t n_handlers_,
     if (!udpif->handlers && !udpif->revalidators) {
         VLOG_INFO("Starting %u threads", n_handlers_requested +
                                          n_revalidators_requested);
-        int error;
+        int error; //只有system类型的数据通路才有改函数 dpif_netlink_handlers_set
         error = dpif_handlers_set(udpif->dpif, n_handlers_requested);
         if (error) {
             VLOG_ERR("failed to configure handlers in dpif %s: %s",
                      dpif_name(udpif->dpif), ovs_strerror(error));
             return;
         }
-        udpif_start_threads(udpif, n_handlers_requested,
+        udpif_start_threads(udpif, n_handlers_requested, //启动revalidators线程，ovs-dpdk场景下，这些线程一直阻塞没有作用
                             n_revalidators_requested);
     }
 }
@@ -733,7 +734,7 @@ udpif_flush(struct udpif *udpif)
 
     udpif_stop_threads(udpif, true);
     dpif_flow_flush(udpif->dpif);
-    udpif_start_threads(udpif, n_handlers_, n_revalidators_);
+    udpif_start_threads(udpif, n_handlers_, n_revalidators_); //启动handler线程
 }
 
 /* Removes all flows from all datapaths. */
@@ -789,11 +790,11 @@ udpif_upcall_handler(void *arg)
     struct udpif *udpif = handler->udpif;
 
     while (!latch_is_set(&handler->udpif->exit_latch)) {
-        if (recv_upcalls(handler)) {
+        if (recv_upcalls(handler)) { //用于接收upcall消息， kerner pat %dpif_netlink_recv, 对于dpdk path没有作用
             poll_immediate_wake();
         } else {
-            dpif_recv_wait(udpif->dpif, handler->handler_id);
-            latch_wait(&udpif->exit_latch);
+            dpif_recv_wait(udpif->dpif, handler->handler_id); //等待upcall消息
+            latch_wait(&udpif->exit_latch); //等待exit消息
         }
         poll_block();
     }

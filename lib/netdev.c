@@ -184,6 +184,7 @@ netdev_run(void)
     CMAP_FOR_EACH (rc, cmap_node, &netdev_classes) {
         if (rc->class->run) {
             rc->class->run(rc->class); //%dpdk_class netdev_linux_class netdev_tap_class , 这都是各种netdev的provider, ovs-dpdk场景，run函数为空，其pmd线程的启动是在dpif_netdev_port_add的时候，然后轮询模式来处理报文，不是中断
+	    //dpdk 没有这个run函数，相关的操作是通过dpdk_watchdog 或者 pmd线程做的
         }
     }
 }
