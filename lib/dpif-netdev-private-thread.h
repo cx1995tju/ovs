@@ -74,15 +74,15 @@ struct dp_netdev_pmd_thread_ctx {
  * actions in either case.
  * */
 struct dp_netdev_pmd_thread {
-    struct dp_netdev *dp;
+    struct dp_netdev *dp; //表示基于dpdk 的 datapath
     struct ovs_refcount ref_cnt;    /* Every reference must be refcount'ed. */
-    struct cmap_node node;          /* In 'dp->poll_threads'. */
+    struct cmap_node node;          /* In 'dp->poll_threads'. */ //链接到对应的数据面
 
     /* Per thread exact-match cache.  Note, the instance for cpu core
      * NON_PMD_CORE_ID can be accessed by multiple threads, and thusly
      * need to be protected by 'non_pmd_mutex'.  Every other instance
      * will only be accessed by its own pmd thread. */
-    OVS_ALIGNED_VAR(CACHE_LINE_SIZE) struct dfc_cache flow_cache;
+    OVS_ALIGNED_VAR(CACHE_LINE_SIZE) struct dfc_cache flow_cache; //保存emc, per-thread的
 
     /* Flow-Table and classifiers
      *
@@ -183,10 +183,10 @@ struct dp_netdev_pmd_thread {
 
     struct ovs_mutex port_mutex;    /* Mutex for 'poll_list' and 'tx_ports'. */
     /* List of rx queues to poll. */
-    struct hmap poll_list OVS_GUARDED;
+    struct hmap poll_list OVS_GUARDED; //需要polling 的rx queue
     /* Map of 'tx_port's used for transmission.  Written by the main thread,
      * read by the pmd thread. */
-    struct hmap tx_ports OVS_GUARDED;
+    struct hmap tx_ports OVS_GUARDED; //需要transmit的tx port
 
     struct ovs_mutex bond_mutex;    /* Protects updates of 'tx_bonds'. */
     /* Map of 'tx_bond's used for transmission.  Written by the main thread

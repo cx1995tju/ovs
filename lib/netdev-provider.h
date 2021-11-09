@@ -101,6 +101,7 @@ struct netdev {
     struct netdev_hw_info hw_info;  /* Offload-capable netdev info. */
 };
 
+//表示netdev发生了某种变化
 static inline void
 netdev_change_seq_changed(const struct netdev *netdev_)
 {

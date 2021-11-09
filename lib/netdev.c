@@ -2288,7 +2288,7 @@ netdev_reconfigure(struct netdev *netdev)
     netdev->last_reconfigure_seq = seq_read(netdev->reconfigure_seq);
 
     return (class->reconfigure
-            ? class->reconfigure(netdev)
+            ? class->reconfigure(netdev) //%netdev_dpdk_reconfigure
             : EOPNOTSUPP);
 }
 

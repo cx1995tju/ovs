@@ -246,8 +246,9 @@ enum sched_assignment_type {
  *    bond_mutex
  *    non_pmd_mutex
  */
+//表示一个datapath，是基于dpdk的
 struct dp_netdev {
-    const struct dpif_class *const class;
+    const struct dpif_class *const class; //%dpif_netdev_class, 各种函数集合
     const char *const name;
     struct ovs_refcount ref_cnt;
     atomic_flag destroyed;
@@ -286,7 +287,7 @@ struct dp_netdev {
     void *dp_purge_aux;
 
     /* Stores all 'struct dp_netdev_pmd_thread's. */
-    struct cmap poll_threads;
+    struct cmap poll_threads; //该数据面对应的pmd线程
     /* id pool for per thread static_tx_qid. */
     struct id_pool *tx_qid_pool;
     struct ovs_mutex tx_qid_pool_mutex;
@@ -5728,7 +5729,7 @@ reconfigure_datapath(struct dp_netdev *dp)
      * no actual reconfiguration in 'port_reconfigure' because it's
      * unnecessary.  */
     HMAP_FOR_EACH (port, node, &dp->ports) {
-        if (netdev_is_reconf_required(port->netdev)
+        if (netdev_is_reconf_required(port->netdev) //被要求去reconfigure的, 根据netdev的reconfigure_seq 来判断对应的port是否需要refconfigure
             || (port->dynamic_txqs
                 != (netdev_n_txq(port->netdev) < wanted_txqs))) {
             port->need_reconfigure = true;
@@ -6142,6 +6143,11 @@ pmd_load_queues_and_ports(struct dp_netdev_pmd_thread *pmd,
     return i;
 }
 
+//在其轮询列表中持续轮询输入端口
+//1. read max 32 packets
+//2. find matching flows
+//3. group packets by flows
+//4. execute actions
 static void *
 pmd_thread_main(void *f_)
 {
@@ -6163,7 +6169,7 @@ pmd_thread_main(void *f_)
     ovsthread_setspecific(pmd->dp->per_pmd_key, pmd);
     ovs_numa_thread_setaffinity_core(pmd->core_id);
     dpdk_set_lcore_id(pmd->core_id); //设置线程绑定的lcore
-    poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
+    poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list); //将pmd->poll_list存入到poll_list中，并返回polled_queue数目
     dfc_cache_init(&pmd->flow_cache);
     pmd_alloc_static_tx_qid(pmd);
 
@@ -6171,6 +6177,7 @@ reload:
     atomic_count_init(&pmd->pmd_overloaded, 0);
 
     /* List port/core affinity */
+    //打印
     for (i = 0; i < poll_cnt; i++) {
        VLOG_DBG("Core %d processing port \'%s\' with queue-id %d\n",
                 pmd->core_id, netdev_rxq_get_name(poll_list[i].rxq->rx),
@@ -6206,7 +6213,7 @@ reload:
 
     /* Protect pmd stats from external clearing while polling. */
     ovs_mutex_lock(&pmd->perf_stats.stats_mutex);
-    for (;;) {
+    for (;;) { //主循环
         uint64_t rx_packets = 0, tx_packets = 0;
 
         pmd_perf_start_iteration(s);
