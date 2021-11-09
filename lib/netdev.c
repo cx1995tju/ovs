@@ -174,6 +174,7 @@ netdev_initialize(void)
  *
  * If your program opens any netdevs, it must call this function within its
  * main poll loop. */
+//要周期性的去处理netdev上的事件，不过netdev_dpdk_class没有run函数的
 void
 netdev_run(void)
     OVS_EXCLUDED(netdev_mutex)
@@ -183,8 +184,8 @@ netdev_run(void)
     struct netdev_registered_class *rc;
     CMAP_FOR_EACH (rc, cmap_node, &netdev_classes) {
         if (rc->class->run) {
-            rc->class->run(rc->class); //%dpdk_class netdev_linux_class netdev_tap_class , 这都是各种netdev的provider, ovs-dpdk场景，run函数为空，其pmd线程的启动是在dpif_netdev_port_add的时候，然后轮询模式来处理报文，不是中断
-	    //dpdk 没有这个run函数，相关的操作是通过dpdk_watchdog 或者 pmd线程做的
+            rc->class->run(rc->class); //%dpdk_class netdev_linux_class netdev_tap_class , 这都是各种netdev的provider, ovs-dpdk场景，run函数为空
+	    //netdev_dpdk_class 没有这个run函数，相关操作在dpdk_watchdog中完成
         }
     }
 }
@@ -234,7 +235,7 @@ netdev_register_provider(const struct netdev_class *new_class)
                    new_class->type);
         error = EEXIST;
     } else {
-        error = new_class->init ? new_class->init() : 0;
+        error = new_class->init ? new_class->init() : 0; //netdev_dpdk_class_init
         if (!error) {
             struct netdev_registered_class *rc;
 
@@ -368,6 +369,7 @@ netdev_is_reserved_name(const char *name)
  * Before opening rxqs or sending packets, '*netdevp' may need to be
  * reconfigured (with netdev_is_reconf_required() and netdev_reconfigure()).
  * */
+//注册所有的netdev_class
 int
 netdev_open(const char *name, const char *type, struct netdev **netdevp)
     OVS_EXCLUDED(netdev_mutex)
@@ -411,11 +413,11 @@ netdev_open(const char *name, const char *type, struct netdev **netdevp)
     }
 
     if (!netdev) {
-        struct netdev_registered_class *rc;
+        struct netdev_registered_class *rc; //type是system internal tap等
 
         rc = netdev_lookup_class(type && type[0] ? type : "system");
         if (rc && ovs_refcount_try_ref_rcu(&rc->refcnt)) {
-            netdev = rc->class->alloc();
+            netdev = rc->class->alloc(); //%dpif_netdev_class
             if (netdev) {
                 memset(netdev, 0, sizeof *netdev);
                 netdev->netdev_class = rc->class;

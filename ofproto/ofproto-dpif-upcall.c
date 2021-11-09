@@ -462,7 +462,7 @@ udpif_create(struct dpif_backer *backer, struct dpif *dpif)
         ovs_mutex_init(&udpif->ukeys[i].mutex);
     }
 
-    dpif_register_upcall_cb(dpif, upcall_cb, udpif);
+    dpif_register_upcall_cb(dpif, upcall_cb, udpif); //只有netdev dpdk类型的datapath才会有register_upcall_cb, %dpif_netdev_class
     dpif_register_dp_purge_cb(dpif, dp_purge_cb, udpif);
 
     return udpif;

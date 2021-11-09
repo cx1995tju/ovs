@@ -209,7 +209,7 @@ COVERAGE_DEFINE(rev_mac_learning);
 COVERAGE_DEFINE(rev_mcast_snooping);
 
 /* All existing ofproto_backer instances, indexed by ofproto->up.type. */
-struct shash all_dpif_backers = SHASH_INITIALIZER(&all_dpif_backers);
+struct shash all_dpif_backers = SHASH_INITIALIZER(&all_dpif_backers); //每种dpif的实现，否会挂一个结构过来
 
 /* All existing ofproto_dpif instances, indexed by ->up.name. */
 static struct hmap all_ofproto_dpifs_by_name =
@@ -301,6 +301,7 @@ enumerate_names(const char *type, struct sset *names)
     struct ofproto_dpif *ofproto;
 
     sset_clear(names);
+    //获取所有的ofproto的名字
     HMAP_FOR_EACH (ofproto, all_ofproto_dpifs_by_name_node,
                    &all_ofproto_dpifs_by_name) {
         if (strcmp(type, ofproto->up.type)) {
@@ -742,13 +743,14 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
     const char *name;
     int error;
 
-    backer = shash_find_data(&all_dpif_backers, type);
-    if (backer) {
+    backer = shash_find_data(&all_dpif_backers, type); //根据type(system netdev)找到per-type的backer
+    if (backer) { //如果backer已经创建了，那么就需要refcount++
         backer->refcount++;
         *backerp = backer;
         return 0;
     }
 
+    //backer_name的名字，ovs-netdev 或者 ovs-system
     backer_name = xasprintf("ovs-%s", type);
 
     /* Remove any existing datapaths, since we assume we're the only
@@ -774,7 +776,7 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
 
     backer = xmalloc(sizeof *backer); //创建backer，为每个datapat类型(system netdev)
 
-    error = dpif_create_and_open(backer_name, type, &backer->dpif);
+    error = dpif_create_and_open(backer_name, type, &backer->dpif); //继续初始化dpif层
     free(backer_name);
     if (error) {
         VLOG_ERR("failed to open datapath of type %s: %s", type,
@@ -816,12 +818,12 @@ open_dpif_backer(const char *type, struct dpif_backer **backerp)
         free(garbage);
     }
 
-    shash_add(&all_dpif_backers, type, backer);
+    shash_add(&all_dpif_backers, type, backer); //将backer添加到全局变量中
 
     check_support(backer);
     atomic_count_init(&backer->tnl_count, 0);
 
-    error = dpif_recv_set(backer->dpif, backer->recv_set_enable);
+    error = dpif_recv_set(backer->dpif, backer->recv_set_enable); //只有dpif_netlink_class才有该函数
     if (error) {
         VLOG_ERR("failed to listen on datapath of type %s: %s",
                  type, ovs_strerror(error));
@@ -1622,6 +1624,7 @@ check_support(struct dpif_backer *backer)
     backer->rt_support.odp.nd_ext = check_nd_extensions(backer);
 }
 
+//构造函数
 static int
 construct(struct ofproto *ofproto_)
 {
@@ -1664,6 +1667,7 @@ construct(struct ofproto *ofproto_)
     ofproto->ams_seqno = seq_read(ofproto->ams_seq);
 
 
+    //如果iface所属的桥的名字是ofproto的名字，那么将iface从init_ofp_ports中删除
     SHASH_FOR_EACH_SAFE (node, next, &init_ofp_ports) {
         struct iface_hint *iface_hint = node->data;
 
@@ -1680,7 +1684,7 @@ construct(struct ofproto *ofproto_)
         }
     }
 
-    hmap_insert(&all_ofproto_dpifs_by_name,
+    hmap_insert(&all_ofproto_dpifs_by_name, //插入到all_ofproto_dpifs
                 &ofproto->all_ofproto_dpifs_by_name_node,
                 hash_string(ofproto->up.name, 0));
     hmap_insert(&all_ofproto_dpifs_by_uuid,
@@ -1688,7 +1692,9 @@ construct(struct ofproto *ofproto_)
                 uuid_hash(&ofproto->uuid));
     memset(&ofproto->stats, 0, sizeof ofproto->stats);
 
+    //创建255个oftable
     ofproto_init_tables(ofproto_, N_TABLES);
+    //添加默认流表
     error = add_internal_flows(ofproto);
 
     ofproto->up.tables[TBL_INTERNAL].flags = OFTABLE_HIDDEN | OFTABLE_READONLY;
@@ -3263,7 +3269,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle = xmalloc(sizeof *bundle);
 
         bundle->ofproto = ofproto;
-        hmap_insert(&ofproto->bundles, &bundle->hmap_node,
+        hmap_insert(&ofproto->bundles, &bundle->hmap_node, //将bundle插入到ofproto->bundles
                     hash_pointer(aux, 0));
         bundle->aux = aux;
         bundle->name = NULL;

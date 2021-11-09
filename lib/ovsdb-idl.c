@@ -88,7 +88,7 @@ struct ovsdb_idl {
     const struct ovsdb_idl_class *class_;
     struct shash table_by_name; /* Contains "struct ovsdb_idl_table *"s.*/
     struct ovsdb_idl_table *tables; /* Array of ->class_->n_tables elements. */
-    unsigned int change_seqno;
+    unsigned int change_seqno;  //与idl_seqno进行比较就知道数据库有没有发生变化，或者重连
     struct ovsdb_idl_txn *txn;
     struct hmap outstanding_txns;
     bool verify_write_only;

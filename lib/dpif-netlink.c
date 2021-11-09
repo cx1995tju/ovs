@@ -346,6 +346,7 @@ dpif_netlink_enumerate(struct sset *all_dps,
     return nl_dump_done(&dump);
 }
 
+//基于netlink来构建datapath
 static int
 dpif_netlink_open(const struct dpif_class *class OVS_UNUSED, const char *name,
                   bool create, struct dpif **dpifp)

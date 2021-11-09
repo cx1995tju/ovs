@@ -205,7 +205,7 @@ static bool initial_config_done;
 static struct ovsdb_idl_txn *daemonize_txn;
 
 /* Most recently processed IDL sequence number. */
-static unsigned int idl_seqno;
+static unsigned int idl_seqno; //数据库发生了变化或者数据库重连了就会发生变化
 
 /* Track changes to port connectivity. */
 static uint64_t connectivity_seqno = LLONG_MIN;
@@ -398,7 +398,7 @@ bridge_init_ofproto(const struct ovsrec_open_vswitch *cfg)
         }
     }
 
-    ofproto_init(&iface_hints);
+    ofproto_init(&iface_hints); //目前只有一种ofproto_class, ofproto_dpif_class
 
     shash_destroy_free_data(&iface_hints);
     initialized = true;
@@ -429,7 +429,7 @@ if_notifier_changed(struct if_notifier *notifier OVS_UNUSED)
 /* Initializes the bridge module, configuring it to obtain its configuration
  * from an OVSDB server accessed over 'remote', which should be a string in a
  * form acceptable to ovsdb_idl_create(). */
-//初始化bridge模块, 主要是丽娜姐数据库ovsdb
+//初始化bridge模块, 主要是连接数据库ovsdb
 void
 bridge_init(const char *remote)
 {
@@ -815,7 +815,7 @@ datapath_reconfigure(const struct ovsrec_open_vswitch *cfg)
 }
 
 //vswitchd启动后，bridge模块需要经过reconfigure使实际生效的配置与数据库中保持一致
-//第一次配置的时候，也是这个函数
+//第一次配置的时候，也是这个函数, 响应数据库的核心函数
 static void
 bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 {
@@ -826,12 +826,12 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
     COVERAGE_INC(bridge_reconfigure);
 
-    //设置各种参数
+    //设置各种参数, 决定dpcls流表最大限制
     ofproto_set_flow_limit(smap_get_uint(&ovs_cfg->other_config, "flow-limit",
                                         OFPROTO_FLOW_LIMIT_DEFAULT));
-    ofproto_set_max_idle(smap_get_uint(&ovs_cfg->other_config, "max-idle",
+    ofproto_set_max_idle(smap_get_uint(&ovs_cfg->other_config, "max-idle", //dpcls流表超时时间
                                       OFPROTO_MAX_IDLE_DEFAULT));
-    ofproto_set_max_revalidator(smap_get_uint(&ovs_cfg->other_config,
+    ofproto_set_max_revalidator(smap_get_uint(&ovs_cfg->other_config, //vlan-limit 决定vlan头个数，单vlan还是双vlan
                                              "max-revalidator",
                                              OFPROTO_MAX_REVALIDATOR_DEFAULT));
     ofproto_set_min_revalidate_pps(
@@ -842,7 +842,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
     ofproto_set_bundle_idle_timeout(smap_get_uint(&ovs_cfg->other_config,
                                                  "bundle-idle-timeout", 0));
     ofproto_set_threads(
-        smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0), //设置线程数目
+        smap_get_int(&ovs_cfg->other_config, "n-handler-threads", 0), //设置线程数目, 这个线程是处理upcall的，在ovs-dpdk中一直阻塞，不会运行
         smap_get_int(&ovs_cfg->other_config, "n-revalidator-threads", 0));
 
     /* Destroy "struct bridge"s, "struct port"s, and "struct iface"s according
@@ -851,9 +851,9 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * This is mostly an update to bridge data structures. Nothing is pushed
      * down to ofproto or lower layers. */
     add_del_bridges(ovs_cfg); //根据数据库的配置，增加删除bridge
-    HMAP_FOR_EACH (br, node, &all_bridges) { //便利每个bridge处理port的增删
+    HMAP_FOR_EACH (br, node, &all_bridges) { //遍历每个bridge处理port的增删
         bridge_collect_wanted_ports(br, &br->wanted_ports);
-        bridge_del_ports(br, &br->wanted_ports);
+        bridge_del_ports(br, &br->wanted_ports); //删除已经不在wanted中的port
     }
 
     /* Start pushing configuration changes down to the ofproto layer:
@@ -868,7 +868,8 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * We have to do all the deletions before we can do any additions, because
      * the ports to be added might require resources that will be freed up by
      * deletions (they might especially overlap in name). */
-    bridge_delete_ofprotos(); //删除多余的ofproto, 如果ofproto没有对应的bridge或者他们的type补一张，那么就删除
+    bridge_delete_ofprotos(); //删除多余的ofproto, 如果ofproto没有对应的bridge或者他们的type不一样，那么就删除
+    //删除不需要的ports
     HMAP_FOR_EACH (br, node, &all_bridges) {
         if (br->ofproto) {
             bridge_delete_or_reconfigure_ports(br);
@@ -880,6 +881,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      *     - Create ofprotos that are missing.
      *
      *     - Add ports that are missing. */
+    //为每个bridge创建对应的ofproto
     HMAP_FOR_EACH_SAFE (br, next, node, &all_bridges) {
         if (!br->ofproto) {
             int error;
@@ -899,13 +901,16 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
 
     config_ofproto_types(&ovs_cfg->other_config);
 
+    //将wanted_ports中的port添加到bridge的ports，ifaces和iface_by_name表中
+    //遍历wanted_ports所有port的所有iface(patch类型不需要下发)，下发到datapath
+    //每个iface还会生成ofport，插入到ofproto->ports中
     HMAP_FOR_EACH (br, node, &all_bridges) { //给每个网桥添加port
-        bridge_add_ports(br, &br->wanted_ports);
+        bridge_add_ports(br, &br->wanted_ports); //将br上的wanted_ports加入到br
         shash_destroy(&br->wanted_ports);
     }
 
     reconfigure_system_stats(ovs_cfg);
-    datapath_reconfigure(ovs_cfg);
+    datapath_reconfigure(ovs_cfg); //datapath的reconfigure
 
     /* Complete the configuration. */
     sflow_bridge_number = 0;
@@ -937,7 +942,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
                                         &iface->cfg->other_config);
             }
         }
-        bridge_configure_mirrors(br);
+        bridge_configure_mirrors(br); //各种配置
         bridge_configure_forward_bpdu(br);
         bridge_configure_mac_table(br);
         bridge_configure_mcast_snooping(br);
@@ -958,11 +963,12 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      * client that reconfiguration is complete, otherwise there is a very
      * narrow race window in which e.g. ofproto/trace will not recognize the
      * new configuration (sometimes this causes unit test failures). */
-    bridge_run__();A //重新配置后，就run起来
+    bridge_run__(); //重新配置后，就run起来
 }
 
 /* Delete ofprotos which aren't configured or have the wrong type.  Create
  * ofprotos which don't exist but need to. */
+//删除最新配置中不存在的ofproto或者type改变的ofproto
 static void
 bridge_delete_ofprotos(void)
 {
@@ -974,12 +980,12 @@ bridge_delete_ofprotos(void)
     /* Delete ofprotos with no bridge or with the wrong type. */
     sset_init(&names);
     sset_init(&types);
-    ofproto_enumerate_types(&types);
+    ofproto_enumerate_types(&types); //只有两类type：system netdev
     SSET_FOR_EACH (type, &types) {
         const char *name;
 
-        ofproto_enumerate_names(type, &names);
-        SSET_FOR_EACH (name, &names) {
+        ofproto_enumerate_names(type, &names); //获取所有的ofproto的名字
+        SSET_FOR_EACH (name, &names) { //遍历name，然后在all_bridges中寻找name, 如果找不到或者bridge的type改变了，那么就需要删除此ofproto
             br = bridge_lookup(name);
             if (!br || strcmp(type, br->type)) {
                 ofproto_delete(name, type);
@@ -1169,9 +1175,9 @@ bridge_add_ports__(struct bridge *br, const struct shash *wanted_ports,
 
             requested_ofp_port = iface_get_requested_ofp_port(iface_cfg);
             if ((requested_ofp_port != OFPP_NONE) == with_requested_port) {
-                struct iface *iface = iface_lookup(br, iface_cfg->name);
+                struct iface *iface = iface_lookup(br, iface_cfg->name); //查看是否已经存在
 
-                if (!iface) {
+                if (!iface) { //不存在就创建
                     iface_create(br, iface_cfg, port_cfg);
                 }
             }
@@ -2051,7 +2057,7 @@ iface_do_create(const struct bridge *br,
 
     type = ofproto_port_open_type(br->ofproto,
                                   iface_get_type(iface_cfg, br->cfg));
-    error = netdev_open(iface_cfg->name, type, &netdev);
+    error = netdev_open(iface_cfg->name, type, &netdev); 
     if (error) {
         VLOG_WARN_BUF(errp, "could not open network device %s (%s)",
                       iface_cfg->name, ovs_strerror(error));
@@ -2065,6 +2071,7 @@ iface_do_create(const struct bridge *br,
 
     iface_set_netdev_mtu(iface_cfg, netdev);
 
+    //获取port id
     *ofp_portp = iface_pick_ofport(iface_cfg);
     error = ofproto_port_add(br->ofproto, netdev, ofp_portp);
     if (error) {
@@ -2117,14 +2124,14 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
     }
 
     /* Get or create the port structure. */
-    port = port_lookup(br, port_cfg->name);
-    if (!port) {
+    port = port_lookup(br, port_cfg->name); //查找是否已经存在port
+    if (!port) { //不存在就创建
         port = port_create(br, port_cfg);
     }
 
     /* Create the iface structure. */
     iface = xzalloc(sizeof *iface);
-    ovs_list_push_back(&port->ifaces, &iface->port_elem);
+    ovs_list_push_back(&port->ifaces, &iface->port_elem); //iface插入到port的ifaces链表中
     hmap_insert(&br->iface_by_name, &iface->name_node,
                 hash_string(iface_cfg->name, 0));
     iface->port = port;
@@ -2133,7 +2140,7 @@ iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
     iface->netdev = netdev;
     iface->type = iface_get_type(iface_cfg, br->cfg);
     iface->cfg = iface_cfg;
-    hmap_insert(&br->ifaces, &iface->ofp_port_node,
+    hmap_insert(&br->ifaces, &iface->ofp_port_node, //iface按照port号hash后，插入到br->ifaces链表中
                 hash_ofp_port(ofp_port));
 
     /* Populate initial status in database. */
@@ -3248,13 +3255,13 @@ bridge_run__(void)
     sset_init(&types);
     ofproto_enumerate_types(&types); //获取所有的type，目前只有两种system netdev
     SSET_FOR_EACH (type, &types) {
-        ofproto_type_run(type); 
+        ofproto_type_run(type);  //每种类型的type_run
     }
     sset_destroy(&types);
 
     /* Let each bridge do the work that it needs to do. */
     HMAP_FOR_EACH (br, node, &all_bridges) { //对于每个ofproto都调用ofproto_run
-        ofproto_run(br->ofproto);//ofproto_run中的p->ofproto_class->run(p)上的run函数依次调用 %dpif_run() 处理所有注册的netlink notifier汇报事件，run_fast处理常见的周期事件，包括upcalls的处理 %dpif_netdev_run
+        ofproto_run(br->ofproto);//ofproto_run中的p->ofproto_class->run(p)上的run函数依次调用 %dpif_run() 处理所有注册的netlink notifier汇报事件，run_fast处理常见的周期事件，包括upcalls的处理 %dpif_netdev_run。 openflow交换机运行
     }
 }
 
@@ -3331,7 +3338,7 @@ bridge_run(void)
         stream_ssl_set_ca_cert_file(ssl->ca_cert, ssl->bootstrap_ca_cert);
     }
 
-    if (ovsdb_idl_get_seqno(idl) != idl_seqno ||
+    if (ovsdb_idl_get_seqno(idl) != idl_seqno || //数据库发生变化，才会进入这里的
         if_notifier_changed(ifnotifier)) {
         struct ovsdb_idl_txn *txn;
 
@@ -3725,13 +3732,13 @@ bridge_collect_wanted_ports(struct bridge *br,
                       br->name, name);
         }
     }
-    if (bridge_get_controllers(br, NULL)
+    if (bridge_get_controllers(br, NULL) //自动添加一个和bridge名字一样的local port
         && !shash_find(wanted_ports, br->name)) {
         VLOG_WARN("bridge %s: no port named %s, synthesizing one",
                   br->name, br->name);
 
-        ovsrec_interface_init(&br->synth_local_iface);
-        ovsrec_port_init(&br->synth_local_port);
+        ovsrec_interface_init(&br->synth_local_iface); //local interface
+        ovsrec_port_init(&br->synth_local_port); //local port
 
         br->synth_local_port.interfaces = &br->synth_local_ifacep;
         br->synth_local_port.n_interfaces = 1;
@@ -3749,6 +3756,7 @@ bridge_collect_wanted_ports(struct bridge *br,
 /* Deletes "struct port"s and "struct iface"s under 'br' which aren't
  * consistent with 'br->cfg'.  Updates 'br->if_cfg_queue' with interfaces which
  * 'br' needs to complete its configuration. */
+//删除已经不在wanted中的port
 static void
 bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
 {
@@ -3757,6 +3765,7 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
 
     /* Get rid of deleted ports.
      * Get rid of deleted interfaces on ports that still exist. */
+	//删除port下不需要的interface
     HMAP_FOR_EACH_SAFE (port, next, hmap_node, &br->ports) {
         port->cfg = shash_find_data(wanted_ports, port->name);
         if (!port->cfg) {
@@ -3767,6 +3776,7 @@ bridge_del_ports(struct bridge *br, const struct shash *wanted_ports)
     }
 
     /* Update iface->cfg and iface->type in interfaces that still exist. */
+    //更新interface的cfg 和 type
     SHASH_FOR_EACH (port_node, wanted_ports) {
         const struct ovsrec_port *port_rec = port_node->data;
         size_t i;
@@ -3894,7 +3904,7 @@ bridge_configure_remotes(struct bridge *br,
         ofproto_set_extra_in_band_remotes(br->ofproto, managers, n_managers);
     }
 
-    n_controllers = (ofproto_get_flow_restore_wait() ? 0
+    n_controllers = (ofproto_get_flow_restore_wait() ? 0 //获取配置的controller
                      : bridge_get_controllers(br, &controllers));
 
     /* The set of controllers to pass down to ofproto. */
@@ -3910,6 +3920,7 @@ bridge_configure_remotes(struct bridge *br,
         .allowed_versions = bridge_get_allowed_versions(br),
         .max_pktq_size = bridge_get_controller_queue_size(br, NULL),
     };
+    //添加默认controller, /usr/local/var/run/openvswitchd/br.mgmt
     shash_add_nocopy(
         &ocs, xasprintf("punix:%s/%s.mgmt", ovs_rundir(), br->name), oc);
 

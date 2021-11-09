@@ -4240,6 +4240,7 @@ netdev_dpdk_class_init(void)
                                  "[netdev]", 0, 1,
                                  netdev_dpdk_get_mempool_info, NULL);
 
+	//注册一些回调函数，这样在dpdk层发生一些事情的时候，会做处理的
         ret = rte_eth_dev_callback_register(RTE_ETH_ALL,
                                             RTE_ETH_EVENT_INTR_RESET,
                                             dpdk_eth_event_callback, NULL);
@@ -5490,6 +5491,7 @@ static const struct netdev_class dpdk_vhost_client_class = {
     .rxq_enabled = netdev_dpdk_vhost_rxq_enabled,
 };
 
+//各种netdev_class的注册
 void
 netdev_dpdk_register(void)
 {

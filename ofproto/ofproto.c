@@ -463,7 +463,7 @@ int
 ofproto_enumerate_names(const char *type, struct sset *names)
 {
     const struct ofproto_class *class = ofproto_class_find__(type);
-    return class ? class->enumerate_names(type, names) : EAFNOSUPPORT;
+    return class ? class->enumerate_names(type, names) : EAFNOSUPPORT; //%ofproto_dpif_class 
 }
 
 static void
@@ -486,8 +486,8 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
 
     *ofprotop = NULL;
 
-    datapath_type = ofproto_normalize_type(datapath_type);
-    class = ofproto_class_find__(datapath_type);
+    datapath_type = ofproto_normalize_type(datapath_type); //system 或者 netdev
+    class = ofproto_class_find__(datapath_type); //%ofproto_dpif_class
     if (!class) {
         VLOG_WARN("could not create datapath %s of unknown type %s",
                   datapath_name, datapath_type);
@@ -502,12 +502,13 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     }
 
     /* Initialize. */
+    //各种初始化
     ovs_mutex_lock(&ofproto_mutex);
     memset(ofproto, 0, sizeof *ofproto);
     ofproto->ofproto_class = class;
     ofproto->name = xstrdup(datapath_name);
     ofproto->type = xstrdup(datapath_type);
-    hmap_insert(&all_ofprotos, &ofproto->hmap_node,
+    hmap_insert(&all_ofprotos, &ofproto->hmap_node, //将ofproto插入到全局变量中
                 hash_string(ofproto->name, 0));
     ofproto->datapath_id = 0;
     ofproto->forward_bpdu = false;
@@ -568,7 +569,7 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     }
 
     ofproto->datapath_id = pick_datapath_id(ofproto);
-    init_ports(ofproto);
+    init_ports(ofproto); //创建ofport添加到，ofproto中
 
     /* Initialize meters table. */
     if (ofproto->ofproto_class->meter_get_features) {
@@ -1412,7 +1413,7 @@ ofproto_bundle_register(struct ofproto *ofproto, void *aux,
                         const struct ofproto_bundle_settings *s)
 {
     return (ofproto->ofproto_class->bundle_set
-            ? ofproto->ofproto_class->bundle_set(ofproto, aux, s)
+            ? ofproto->ofproto_class->bundle_set(ofproto, aux, s) //%ofproto_dpif_class
             : EOPNOTSUPP);
 }
 
@@ -2045,7 +2046,7 @@ const char *
 ofproto_port_open_type(const struct ofproto *ofproto, const char *port_type)
 {
     return (ofproto->ofproto_class->port_open_type
-            ? ofproto->ofproto_class->port_open_type(ofproto->type, port_type)
+            ? ofproto->ofproto_class->port_open_type(ofproto->type, port_type)  //%ofproto_dpif_class
             : port_type);
 }
 
@@ -2064,7 +2065,7 @@ ofproto_port_add(struct ofproto *ofproto, struct netdev *netdev,
     ofp_port_t ofp_port = ofp_portp ? *ofp_portp : OFPP_NONE;
     int error;
 
-    error = ofproto->ofproto_class->port_add(ofproto, netdev);
+    error = ofproto->ofproto_class->port_add(ofproto, netdev); //%dpif_netdev_class
     if (!error) {
         const char *netdev_name = netdev_get_name(netdev);
 
@@ -2484,6 +2485,7 @@ ofport_install(struct ofproto *p,
     if (error) {
         goto error;
     }
+    //发送端口添加消息
     connmgr_send_port_status(p->connmgr, NULL, NULL, pp, OFPPR_ADD);
     return 0;
 
@@ -2714,8 +2716,8 @@ update_port(struct ofproto *ofproto, const char *name)
     }
 
     if (netdev) {
-        port = ofproto_get_port(ofproto, ofproto_port.ofp_port);
-        if (port && !strcmp(netdev_get_name(port->netdev), name)) {
+        port = ofproto_get_port(ofproto, ofproto_port.ofp_port); //查找port
+        if (port && !strcmp(netdev_get_name(port->netdev), name)) { //如果存在的话，重新配置
             struct netdev *old_netdev = port->netdev;
 
             /* ofport_open() only sets OFPUTIL_PC_PORT_DOWN and
@@ -2745,7 +2747,7 @@ update_port(struct ofproto *ofproto, const char *name)
             }
 
             netdev_close(old_netdev);
-        } else {
+        } else { //如果不存在的话，就分配ofport, 插入到ofproto->ports中
             /* If 'port' is nonnull then its name differs from 'name' and thus
              * we should delete it.  If we think there's a port named 'name'
              * then its port number must be wrong now so delete it too. */

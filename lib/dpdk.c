@@ -454,7 +454,7 @@ dpdk_init__(const struct smap *ovs_other_config)
     argv = xmemdup(args.names, (args.n + 1) * sizeof args.names[0]);
 
     /* Make sure things are initialized ... */
-    result = rte_eal_init(args.n, argv);
+    result = rte_eal_init(args.n, argv); //dpdk初始化
 
     free(argv);
     svec_destroy(&args);

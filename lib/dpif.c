@@ -106,6 +106,7 @@ dpif_is_tap_port(const char *type)
     return !strcmp(type, "tap");
 }
 
+//datapath initialize
 static void
 dp_initialize(void)
 {
@@ -129,7 +130,7 @@ dp_initialize(void)
 }
 
 static int
-dp_register_provider__(const struct dpif_class *new_class)
+dp_register_provider__(const struct dpif_class *new_class) //%dpif_netdev_class
 {
     struct registered_dpif_class *registered_class;
     int error;
@@ -239,7 +240,7 @@ dp_enumerate_types(struct sset *types)
     dp_initialize();
 
     ovs_mutex_lock(&dpif_mutex);
-    SHASH_FOR_EACH(node, &dpif_classes) {
+    SHASH_FOR_EACH(node, &dpif_classes) { //获取所有dpif_class的type，目前只有两个 system netdev
         const struct registered_dpif_class *registered_class = node->data;
         sset_add(types, registered_class->dpif_class->type);
     }
@@ -344,7 +345,7 @@ do_open(const char *name, const char *type, bool create, struct dpif **dpifp)
         goto exit;
     }
 
-    error = registered_class->dpif_class->open(registered_class->dpif_class,
+    error = registered_class->dpif_class->open(registered_class->dpif_class,  //dpif_netlink_open , dpif_netdev_open
                                                name, create, &dpif);
     if (!error) {
         const char *dpif_type_str = dpif_normalize_type(dpif_type(dpif));
@@ -461,7 +462,7 @@ dpif_close(struct dpif *dpif)
 bool
 dpif_run(struct dpif *dpif)
 {
-    if (dpif->dpif_class->run) {
+    if (dpif->dpif_class->run) { //dpif_netdev_class 
         return dpif->dpif_class->run(dpif);
     }
     return false;
@@ -563,7 +564,7 @@ dpif_port_open_type(const char *datapath_type, const char *port_type)
 
     ovs_mutex_lock(&dpif_mutex);
     rc = shash_find_data(&dpif_classes, datapath_type);
-    if (rc && rc->dpif_class->port_open_type) {
+    if (rc && rc->dpif_class->port_open_type) { //%dpif_netdev_class
         port_type = rc->dpif_class->port_open_type(rc->dpif_class, port_type);
     }
     ovs_mutex_unlock(&dpif_mutex);

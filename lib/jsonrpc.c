@@ -1011,6 +1011,8 @@ jsonrpc_session_connect(struct jsonrpc_session *s)
     }
 }
 
+//s->pstream不为空的时候，会分配rpc结构用于通信
+//运行一次json rpc 会话
 void
 jsonrpc_session_run(struct jsonrpc_session *s)
 {
@@ -1038,6 +1040,7 @@ jsonrpc_session_run(struct jsonrpc_session *s)
         }
     }
 
+    //rpc 不是空的时候，尝试循环接收数据了
     if (s->rpc) {
         size_t backlog;
         int error;

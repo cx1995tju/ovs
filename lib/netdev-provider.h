@@ -83,6 +83,7 @@ struct netdev {
      * the operations on the device and calling netdev_reconfigure() to allow
      * the configuration changes.  'last_reconfigure_seq' remembers the value
      * of 'reconfigure_seq' when the last reconfiguration happened. */
+ //netdev provider通知upper layer(client of datapath, ovs-vswitchd)，device发生了改变，这是通过这个seq来实现的, 这样upper layer就会停止操作，然后调用netdev_reconfigure, 允许配置发生改变, 譬如 %netdev_dpdk_reconfigure
     struct seq *reconfigure_seq;
     uint64_t last_reconfigure_seq;
 
