@@ -429,7 +429,7 @@ if_notifier_changed(struct if_notifier *notifier OVS_UNUSED)
 /* Initializes the bridge module, configuring it to obtain its configuration
  * from an OVSDB server accessed over 'remote', which should be a string in a
  * form acceptable to ovsdb_idl_create(). */
-//初始化bridge模块, 主要是连接数据库ovsdb
+//初始化bridge模块, 连接数据库ovsdb 以及各种初始化
 void
 bridge_init(const char *remote)
 {
@@ -3276,7 +3276,7 @@ bridge_run(void)
 
     ovsrec_open_vswitch_init(&null_cfg); //首先读取ovsdb的配置信息，其中包含了用户创建了多少bridge，每个bridge有多少个port，iface等信息
 
-    ovsdb_idl_run(idl); //处理一批从IDL数据库服务器的消息
+    ovsdb_idl_run(idl);
 
     if_notifier_run();
 
@@ -3302,11 +3302,11 @@ bridge_run(void)
          * contents. */
         return;
     }
-    cfg = ovsrec_open_vswitch_first(idl);
+    cfg = ovsrec_open_vswitch_first(idl); //返回table中的第一行
 
-    if (cfg) {
+    if (cfg) { //每次都会进入的，但是内层函数，会判断是否有没有初始化的，如果初始化了，就不会再初始化了
         netdev_set_flow_api_enabled(&cfg->other_config); //使能硬件offload
-        dpdk_init(&cfg->other_config); //dpdk初始化
+        dpdk_init(&cfg->other_config); //dpdk初始化, dpdk的参数都是在open_vswitch 表的other_config中, idl层已经将数据库信息，组织成c结构了，直接使用就好
         userspace_tso_init(&cfg->other_config);
     }
 

@@ -93,6 +93,7 @@ struct ovsdb_idl_row {
     struct ovsdb_datum *tracked_old_datum; /* Old deleted data. */
 };
 
+//表示数据库中的某一列，显然是idl接口提供的将数据库的数据转换为c结构
 struct ovsdb_idl_column {
     char *name;
     struct ovsdb_type type;

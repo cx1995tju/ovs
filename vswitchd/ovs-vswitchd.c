@@ -124,7 +124,7 @@ main(int argc, char *argv[])
             memory_report(&usage);
             simap_destroy(&usage);
         }
-        bridge_run(); //处理controller的交互, ovs-ofctl命令
+        bridge_run(); //处理controller的交互, ovs-ofctl命令, 同步数据相关内容
         unixctl_server_run(unixctl); 
         netdev_run(); //虚拟网卡的初始化, 监控网卡状态并更新, 譬如其他控制面更新了一些网卡的信息，会修改change_seq的，这里就能检测到，做具体操作netdev.change_seq %netdev_change_seq_changed 
 

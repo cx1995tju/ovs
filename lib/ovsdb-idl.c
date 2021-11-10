@@ -416,6 +416,7 @@ ovsdb_idl_clear(struct ovsdb_idl *db)
 /* Processes a batch of messages from the database server on 'idl'.  This may
  * cause the IDL's contents to change.  The client may check for that with
  * ovsdb_idl_get_seqno(). */
+//ovsdb发送了一批消息在IDL层，等待client来处理
 void
 ovsdb_idl_run(struct ovsdb_idl *idl)
 {
@@ -2552,6 +2553,7 @@ ovsdb_idl_txn_status_to_string(enum ovsdb_idl_txn_status status)
 /* Starts a new transaction on 'idl'.  A given ovsdb_idl may only have a single
  * active transaction at a time.  See the large comment in ovsdb-idl.h for
  * general information on transactions. */
+//构建一个transaction
 struct ovsdb_idl_txn *
 ovsdb_idl_txn_create(struct ovsdb_idl *idl)
 {
@@ -2988,18 +2990,18 @@ ovsdb_idl_txn_extract_mutations(struct ovsdb_idl_row *row,
 /* Attempts to commit 'txn'.  Returns the status of the commit operation, one
  * of the following TXN_* constants:
  *
- *   TXN_INCOMPLETE:
+ *   TXN_INCOMPLETE: //在ovsdb_idl_run后需要call again
  *
  *       The transaction is in progress, but not yet complete.  The caller
  *       should call again later, after calling ovsdb_idl_run() to let the IDL
  *       do OVSDB protocol processing.
  *
- *   TXN_UNCHANGED:
+ *   TXN_UNCHANGED: //transaction 完成了
  *
  *       The transaction is complete.  (It didn't actually change the database,
  *       so the IDL didn't send any request to the database server.)
  *
- *   TXN_ABORTED:
+ *   TXN_ABORTED: //client调用了abort
  *
  *       The caller previously called ovsdb_idl_txn_abort().
  *
