@@ -1166,16 +1166,16 @@ bridge_add_ports__(struct bridge *br, const struct shash *wanted_ports,
     struct shash_node *port_node;
 
     SHASH_FOR_EACH (port_node, wanted_ports) {
-        const struct ovsrec_port *port_cfg = port_node->data;
+        const struct ovsrec_port *port_cfg = port_node->data; //获取数据库中的port 的配置
         size_t i;
 
-        for (i = 0; i < port_cfg->n_interfaces; i++) {
+        for (i = 0; i < port_cfg->n_interfaces; i++) { //遍历port上的所有interface
             const struct ovsrec_interface *iface_cfg = port_cfg->interfaces[i];
             ofp_port_t requested_ofp_port;
 
             requested_ofp_port = iface_get_requested_ofp_port(iface_cfg);
             if ((requested_ofp_port != OFPP_NONE) == with_requested_port) {
-                struct iface *iface = iface_lookup(br, iface_cfg->name); //查看是否已经存在
+                struct iface *iface = iface_lookup(br, iface_cfg->name); //查看是否已经在bridge上存在
 
                 if (!iface) { //不存在就创建
                     iface_create(br, iface_cfg, port_cfg);
@@ -1190,7 +1190,7 @@ bridge_add_ports(struct bridge *br, const struct shash *wanted_ports)
 {
     /* First add interfaces that request a particular port number. */
     bridge_add_ports__(br, wanted_ports, true);
-    //->iface_create -> iface_do_create -> ofproto_port_add -> (ofproto->ofproto_class->port_add) %dpif_netdev_port_add,  %dpif_netlink_port_add
+    //->iface_create -> iface_do_create -> ofproto_port_add -> (ofproto->ofproto_class->port_add) ofproto_dpif_class
 
     /* Then add interfaces that want automatic port number assignment.
      * We add these afterward to avoid accidentally taking a specifically
@@ -2038,6 +2038,7 @@ iface_set_netdev_config(const struct ovsrec_interface *iface_cfg,
  *
  * If successful, returns 0 and stores the network device in '*netdevp'.  On
  * failure, returns a positive errno value and stores NULL in '*netdevp'. */
+//根据iface_cfg 找一个network device，然后分配ofp_port, 分配netdev结构，都通过指针返回去
 static int
 iface_do_create(const struct bridge *br,
                 const struct ovsrec_interface *iface_cfg,
@@ -2103,13 +2104,14 @@ error:
  * deallocates 'if_cfg'.
  *
  * Return true if an iface is successfully created, false otherwise. */
+//通过if_cfg找到对应的设备，然后创建一个iface结构
 static bool
 iface_create(struct bridge *br, const struct ovsrec_interface *iface_cfg,
              const struct ovsrec_port *port_cfg)
 {
     struct netdev *netdev;
     struct iface *iface;
-    ofp_port_t ofp_port;
+    ofp_port_t ofp_port; //分配的ofp_port, 或者是用户请求的ofp_port
     struct port *port;
     char *errp = NULL;
     int error;

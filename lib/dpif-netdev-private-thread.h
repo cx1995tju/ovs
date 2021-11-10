@@ -67,16 +67,24 @@ struct dp_netdev_pmd_thread_ctx {
  * I/O of all non-pmd threads.  There will be no actual thread created
  * for the instance.
  *
+ * 每个pmd都有自己的EMC
+ * 每个端口有自己的dpcls
+ * 每个bridge才有ofproto classifier
+ *
  * Each struct has its own flow cache and classifier per managed ingress port.
  * For packets received on ingress port, a look up is done on corresponding PMD
  * thread's flow cache and in case of a miss, lookup is performed in the
  * corresponding classifier of port.  Packets are executed with the found
  * actions in either case.
  * */
+//dp: datapath
+//netdev: 不是开头的netdev表示dpdk
+//pmd_thread
+//综上：这个结构表示一个dpdk类型的datapath的pmd thread
 struct dp_netdev_pmd_thread {
-    struct dp_netdev *dp; //表示基于dpdk 的 datapath
+    struct dp_netdev *dp; //表示基于dpdk 的 datapath, 一个datapath可能有很多thread的
     struct ovs_refcount ref_cnt;    /* Every reference must be refcount'ed. */
-    struct cmap_node node;          /* In 'dp->poll_threads'. */ //链接到对应的数据面
+    struct cmap_node node;          /* In 'dp->poll_threads'. */ //链接到对应的datapath 结构的链表上
 
     /* Per thread exact-match cache.  Note, the instance for cpu core
      * NON_PMD_CORE_ID can be accessed by multiple threads, and thusly

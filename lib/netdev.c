@@ -369,7 +369,7 @@ netdev_is_reserved_name(const char *name)
  * Before opening rxqs or sending packets, '*netdevp' may need to be
  * reconfigured (with netdev_is_reconf_required() and netdev_reconfigure()).
  * */
-//注册所有的netdev_class
+//注册所有的netdev_class, 获取具体的network device
 int
 netdev_open(const char *name, const char *type, struct netdev **netdevp)
     OVS_EXCLUDED(netdev_mutex)

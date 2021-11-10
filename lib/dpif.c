@@ -593,7 +593,7 @@ dpif_port_add(struct dpif *dpif, struct netdev *netdev, odp_port_t *port_nop)
         port_no = *port_nop;
     }
 
-    error = dpif->dpif_class->port_add(dpif, netdev, &port_no);
+    error = dpif->dpif_class->port_add(dpif, netdev, &port_no); //%dpif_netdev_port_add
     if (!error) {
         VLOG_DBG_RL(&dpmsg_rl, "%s: added %s as port %"PRIu32,
                     dpif_name(dpif), netdev_name, port_no);

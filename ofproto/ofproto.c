@@ -2065,7 +2065,7 @@ ofproto_port_add(struct ofproto *ofproto, struct netdev *netdev,
     ofp_port_t ofp_port = ofp_portp ? *ofp_portp : OFPP_NONE;
     int error;
 
-    error = ofproto->ofproto_class->port_add(ofproto, netdev); //%dpif_netdev_class
+    error = ofproto->ofproto_class->port_add(ofproto, netdev); //%ofproto_dpif_class
     if (!error) {
         const char *netdev_name = netdev_get_name(netdev);
 

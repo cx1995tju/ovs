@@ -245,6 +245,11 @@ enum sched_assignment_type {
  *    port_mutex
  *    bond_mutex
  *    non_pmd_mutex
+ *
+ *    每个类型的datpath 应该只有一个该结构，参考 dpif_netdev, 这个结构层级更高, 其才是dpif provider层的datapath的实现，可以看出来其与dpif的关系就是一种first-member inherit的关系。 而dp_netdev则是具体的datapath内部的组织而已。譬如：在dpdk场景下，所有的dpif都共享一个dp_netdev
+ *    从这个结构的成员也可以看出来，都是一些全局的信息，譬如pmd, 参考dpif_netdev_open 的注释也可以知道的
+ *
+ *    不过对于ovs kernel是否是这样，不确定
  */
 //表示一个datapath，是基于dpdk的
 struct dp_netdev {
@@ -453,6 +458,7 @@ struct tx_bond {
 };
 
 /* Interface to netdev-based datapath. */
+// 每个bridge都有一个这个结构，但是共享一个dp结构
 struct dpif_netdev {
     struct dpif dpif;
     struct dp_netdev *dp;
@@ -6112,6 +6118,7 @@ pmd_free_static_tx_qid(struct dp_netdev_pmd_thread *pmd)
     ovs_mutex_unlock(&pmd->dp->tx_qid_pool_mutex);
 }
 
+//每个pmd需要polling哪些queue?
 static int
 pmd_load_queues_and_ports(struct dp_netdev_pmd_thread *pmd,
                           struct polled_queue **ppoll_list)
@@ -6166,14 +6173,14 @@ pmd_thread_main(void *f_)
     poll_list = NULL;
 
     /* Stores the pmd thread's 'pmd' to 'per_pmd_key'. */
-    ovsthread_setspecific(pmd->dp->per_pmd_key, pmd);
+    ovsthread_setspecific(pmd->dp->per_pmd_key, pmd); //保存pmd指针
     ovs_numa_thread_setaffinity_core(pmd->core_id);
     dpdk_set_lcore_id(pmd->core_id); //设置线程绑定的lcore
     poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list); //将pmd->poll_list存入到poll_list中，并返回polled_queue数目
     dfc_cache_init(&pmd->flow_cache);
     pmd_alloc_static_tx_qid(pmd);
 
-reload:
+reload: //后面的for循环，可能被跳出，然后goto reload，重新加载的
     atomic_count_init(&pmd->pmd_overloaded, 0);
 
     /* List port/core affinity */
