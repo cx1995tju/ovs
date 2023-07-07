@@ -391,6 +391,7 @@ struct dp_netdev_rxq {
 };
 
 /* A port in a netdev-based datapath. */
+//内核中的port概念要在datapath的vport中体现了
 struct dp_netdev_port {
     odp_port_t port_no;
     bool dynamic_txqs;          /* If true XPS will be used. */

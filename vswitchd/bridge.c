@@ -3274,11 +3274,11 @@ void
 bridge_run(void)
 {
     static struct ovsrec_open_vswitch null_cfg;
-    const struct ovsrec_open_vswitch *cfg;
+    const struct ovsrec_open_vswitch *cfg; // cfg 的首元素表示该 table 的一行
 
-    ovsrec_open_vswitch_init(&null_cfg); //首先读取ovsdb的配置信息，其中包含了用户创建了多少bridge，每个bridge有多少个port，iface等信息
+    ovsrec_open_vswitch_init(&null_cfg); //  // 打开并建立 open_vswitch 表 ctx
 
-    ovsdb_idl_run(idl);
+    ovsdb_idl_run(idl); // 启动了和数据库交互的通道了
 
     if_notifier_run();
 
@@ -3304,7 +3304,7 @@ bridge_run(void)
          * contents. */
         return;
     }
-    cfg = ovsrec_open_vswitch_first(idl); //返回table中的第一行
+    cfg = ovsrec_open_vswitch_first(idl);  // open_vswitch 表的第一行
 
     if (cfg) { //每次都会进入的，但是内层函数，会判断是否有没有初始化的，如果初始化了，就不会再初始化了
         netdev_set_flow_api_enabled(&cfg->other_config); //使能硬件offload

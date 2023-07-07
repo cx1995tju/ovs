@@ -84,7 +84,7 @@ struct netdev {
      * the configuration changes.  'last_reconfigure_seq' remembers the value
      * of 'reconfigure_seq' when the last reconfiguration happened. */
  //netdev provider通知upper layer(client of datapath, ovs-vswitchd)，device发生了改变，这是通过这个seq来实现的, 这样upper layer就会停止操作，然后调用netdev_reconfigure, 允许配置发生改变, 譬如 %netdev_dpdk_reconfigure
-    struct seq *reconfigure_seq;
+    struct seq *reconfigure_seq;	// netdev provider 可以通过 netdev_request_reconfigure() 来请求 reconf
     uint64_t last_reconfigure_seq;
 
     /* The core netdev code initializes these at netdev construction and only
@@ -285,7 +285,7 @@ struct netdev_class {
      *
      * 'netdev_class' points to the class.  It is useful in case the same
      * function is used to implement different classes. */
-    void (*wait)(const struct netdev_class *netdev_class);
+    void (*wait)(const struct netdev_class *netdev_class);	// ??????
 
 /* ## ---------------- ## */
 /* ## netdev Functions ## */

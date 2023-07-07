@@ -294,6 +294,7 @@ static netdev_tx_t internal_dev_recv(struct sk_buff *skb)
 	stats->rx_bytes += skb->len;
 	u64_stats_update_end(&stats->syncp);
 
+	//非napi方式
 	netif_rx(skb);
 	return NETDEV_TX_OK;
 }

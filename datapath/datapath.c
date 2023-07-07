@@ -2623,6 +2623,7 @@ static int __init dp_init(void)
 	if (err)
 		goto error;
 
+	//注册netlink相关，以及internal port相关的ops
 	err = ovs_internal_dev_rtnl_link_register();
 	if (err)
 		goto error_action_fifos_exit;
@@ -2635,6 +2636,7 @@ static int __init dp_init(void)
 	if (err)
 		goto error_flow_exit;
 
+	//net子系统相关的namespace
 	err = register_pernet_device(&ovs_net_ops);
 	if (err)
 		goto error_vport_exit;
@@ -2643,14 +2645,17 @@ static int __init dp_init(void)
 	if (err)
 		goto error_netns_exit;
 
+	//注册处理函数到设备信息变化的通知链
 	err = register_netdevice_notifier(&ovs_dp_device_notifier);
 	if (err)
 		goto error_compat_exit;
 
+	//port创建等相关的ops
 	err = ovs_netdev_init();
 	if (err)
 		goto error_unreg_notifier;
 
+	//注册一个通用的netlink层, 用于与用户空间通信
 	err = dp_register_genl();
 	if (err < 0)
 		goto error_unreg_netdev;

@@ -316,7 +316,7 @@ free_poll_nodes(struct poll_loop *loop)
  * occurs, or until the minimum duration registered with poll_timer_wait()
  * elapses, or not at all if poll_immediate_wake() has been called. */
 void
-poll_block(void)
+poll_block(void)	// Per-thread 的，只响应自己的线程注册的事件。 而且一旦被唤醒后，前面注册的所有事件都会被取消。不管有没有发生
 {
     struct poll_loop *loop = poll_loop();
     struct poll_node *node;
@@ -414,7 +414,7 @@ poll_loop(void)
 
     loop = pthread_getspecific(key);
     if (!loop) {
-        loop = xzalloc(sizeof *loop);
+        loop = xzalloc(sizeof *loop);	// 这里可以看到是 per-thread 的
         loop->timeout_when = LLONG_MAX;
         hmap_init(&loop->poll_nodes);
         xpthread_setspecific(key, loop);

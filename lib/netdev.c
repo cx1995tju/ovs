@@ -195,7 +195,7 @@ netdev_run(void)
  * If your program opens any netdevs, it must call this function within its
  * main poll loop. */
 void
-netdev_wait(void)
+netdev_wait(void)	// 一般在里面注册一些事件，这些事件的发生会触发 poll_block() 醒来
     OVS_EXCLUDED(netdev_mutex)
 {
     netdev_initialize();
