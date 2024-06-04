@@ -154,7 +154,7 @@ emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key)
     EMC_FOR_EACH_POS_WITH_HASH (cache, current_entry, key->hash) {
         if (current_entry->key.hash == key->hash
             && emc_entry_alive(current_entry)
-            && emc_flow_key_equal_mf(&current_entry->key, &key->mf)) {
+            && emc_flow_key_equal_mf(&current_entry->key, &key->mf)) {	// 遍历 entry，然后用 miniflow 匹配
 
             /* We found the entry with the 'key->mf' miniflow */
             return current_entry->flow;

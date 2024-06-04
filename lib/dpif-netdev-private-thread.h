@@ -99,10 +99,10 @@ struct dp_netdev_pmd_thread {
      * 'flow_mutex'.
      */
     struct ovs_mutex flow_mutex;
-    struct cmap flow_table OVS_GUARDED; /* Flow table. */
+    struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd
 
     /* One classifier per in_port polled by the pmd */
-    struct cmap classifiers;
+    struct cmap classifiers;	// per-in_port
     /* Periodically sort subtable vectors according to hit frequencies */
     long long int next_optimization;
     /* End of the next time interval for which processing cycles

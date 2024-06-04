@@ -700,16 +700,16 @@ DECL_OFPROTO_COLLECTION (struct ofgroup *, group)
  * data structure.  The "alloc" function is not given any information about the
  * use of the new data structure, so it cannot perform much initialization.
  * Its purpose is just to ensure that the new data structure has enough room
- * for base and derived state.  It may return a null pointer if memory is not
+ * for base and derived state.  It may return a null pointer if memory is not	// 要确保有足够的空间 for base and derived state
  * available, in which case none of the other functions is called.
  *
- * Each "construct" function initializes derived state in its respective data
+ * Each "construct" function initializes derived state in its respective data	// 仅仅用来初始化 derived state, 其被调用的时候，base state 肯定是初始化好的
  * structure.  When "construct" is called, all of the base state has already
- * been initialized, so the "construct" function may refer to it.  The
+ * been initialized, so the "construct" function may refer to it.  The		// 所以在 construct 中可以引用 base state
  * "construct" function is allowed to fail, in which case the client calls the
  * "dealloc" function (but not the "destruct" function).
  *
- * Each "destruct" function uninitializes and frees derived state in its
+ * Each "destruct" function uninitializes and frees derived state in its	// 也是仅仅处理 derived state, 被调用的时候，base state 还没有被 destruct，还可以引用
  * respective data structure.  When "destruct" is called, the base state has
  * not yet been uninitialized, so the "destruct" function may refer to it.  The
  * "destruct" function is not allowed to fail.
@@ -727,12 +727,12 @@ DECL_OFPROTO_COLLECTION (struct ofgroup *, group)
  * code on failure.  Depending on the function, valid error codes are either
  * errno values or OFPERR_* OpenFlow error codes.
  *
- * Most of these functions are expected to execute synchronously, that is, to
+ * Most of these functions are expected to execute synchronously, that is, to	// 下面的大部分函数都是 同步的，即需要阻塞获取结果。如果无法获取，可以访问 EAGAIN
  * block as necessary to obtain a result.  Thus, these functions may return
  * EAGAIN (or EWOULDBLOCK or EINPROGRESS) only where the function descriptions
  * explicitly say those errors are a possibility.  We may relax this
  * requirement in the future if and when we encounter performance problems. */
-struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
+struct ofproto_class { //目前ovs只实现了唯一的一个ofproto_dpif_class
 /* ## ----------------- ## */
 /* ## Factory Functions ## */
 /* ## ----------------- ## */
@@ -745,13 +745,13 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      * make copies of anything required.  An ofproto provider must
      * remove any existing state that is not described by the hint, and
      * may choose to remove it all. */
-    void (*init)(const struct shash *iface_hints);
+    void (*init)(const struct shash *iface_hints);	// 主线程调用进而做初始化 bridge_run() -> bridge_init_ofproto() -> ofproto_init()。会将 openflow switch 启动时的所有 iface 信息传递进来
 
     /* Enumerates the types of all supported ofproto types into 'types'.  The
      * caller has already initialized 'types'.  The implementation should add
      * its own types to 'types' but not remove any existing ones, because other
      * ofproto classes might already have added names to it. */
-    void (*enumerate_types)(struct sset *types);
+    void (*enumerate_types)(struct sset *types);	// 不要从 types 中删除, ofproto type
 
     /* Enumerates the names of all existing datapath of the specified 'type'
      * into 'names' 'all_dps'.  The caller has already initialized 'names' as
@@ -761,7 +761,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      *
      * Returns 0 if successful, otherwise a positive errno value.
      */
-    int (*enumerate_names)(const char *type, struct sset *names);
+    int (*enumerate_names)(const char *type, struct sset *names); // ofproto 支持的 datapath name
 
     /* Deletes the datapath with the specified 'type' and 'name'.  The caller
      * should have closed any open ofproto with this 'type' and 'name'; this
@@ -772,7 +772,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      *
      * Returns 0 if successful, otherwise a positive errno value.
      */
-    int (*del)(const char *type, const char *name);
+    int (*del)(const char *type, const char *name); // 删除一个 datapath
 
     /* Returns the type to pass to netdev_open() when a datapath of type
      * 'datapath_type' has a port of type 'port_type', for a few special
@@ -782,7 +782,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      *
      * Returns either 'type' itself or a string literal, which must not
      * be freed. */
-    const char *(*port_open_type)(const char *datapath_type,
+    const char *(*port_open_type)(const char *datapath_type, // 当 netdev type 和 port type 的类型不同的时候, 需要调用这个函数
                                   const char *port_type);
 
 /* ## ------------------------ ## */
@@ -796,7 +796,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      * it needs type-level maintenance.
      *
      * Returns 0 if successful, otherwise a positive errno value. */
-    int (*type_run)(const char *type);
+    int (*type_run)(const char *type); // bridge_run__() -> type_run()
 
     /* Causes the poll loop to wake up when a type 'type''s 'run'
      * function needs to be called, e.g. by calling the timer or fd
@@ -804,7 +804,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      *
      * An ofproto provider may implement it or not, depending on whether
      * it needs type-level maintenance. */
-    void (*type_wait)(const char *type);
+    void (*type_wait)(const char *type); // bridge_wait() -> type_wait()
 
 /* ## --------------------------- ## */
 /* ## Top-Level ofproto Functions ## */
@@ -1074,7 +1074,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      * It doesn't matter whether the new port will be returned by a later call
      * to ->port_poll(); the implementation may do whatever is more
      * convenient. */
-    int (*port_add)(struct ofproto *ofproto, struct netdev *netdev);
+    int (*port_add)(struct ofproto *ofproto, struct netdev *netdev);	// _重要_
 
     /* Deletes port number 'ofp_port' from the datapath for 'ofproto'.  Returns
      * 0 if successful, otherwise a positive errno value.
@@ -1092,7 +1092,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
     int (*port_get_stats)(const struct ofport *port,
                           struct netdev_stats *stats);
 
-    /* Get status of the virtual port (ex. tunnel, patch).
+    /* Get status of the virtual port (ex. tunnel, patch).	// _重要_
      *
      * Returns '0' if 'port' is not a virtual port or has no errors.
      * Otherwise, stores the error string in '*errp' and returns positive errno
@@ -1707,7 +1707,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
                       const struct ofproto_port_queue *queues, size_t n_qdscp);
 
     /* If 's' is nonnull, this function registers a "bundle" associated with
-     * client data pointer 'aux' in 'ofproto'.  A bundle is the same concept as
+     * client data pointer 'aux' in 'ofproto'.  A bundle is the same concept as	// bundle 就是 OVSDB 中的 Port 概念
      * a Port in OVSDB, that is, it consists of one or more "member"
      * devices (Interfaces, in OVSDB) along with VLAN and LACP configuration
      * and, if there is more than one member, a bonding configuration.  If 'aux'
@@ -1723,7 +1723,7 @@ struct ofproto_class { //目前ovs只有一类，ofproto_dpif_class
      * it at all may set it to NULL or return EOPNOTSUPP.  An implementation
      * that supports only a subset of the functionality should implement what
      * it can and return 0. */
-    int (*bundle_set)(struct ofproto *ofproto, void *aux,
+    int (*bundle_set)(struct ofproto *ofproto, void *aux,	// aux 做为 key，创建 bundle 并保存到 ofproto->bundles 中
                       const struct ofproto_bundle_settings *s);
 
     /* If 'port' is part of any bundle, removes it from that bundle.  If the

@@ -121,7 +121,7 @@ struct dp_netdev_flow {
 
     /* Packet classification. */
     char *dp_extra_info;         /* String to return in a flow dump/get. */
-    struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */
+    struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */	// megaflow
     /* 'cr' must be the last member. */
 };
 

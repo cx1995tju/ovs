@@ -1395,7 +1395,7 @@ ofproto_port_get_lacp_stats(const struct ofport *port,
     return error;
 }
 
-/* Bundles. */
+/* Bundles. 就是 ovsdb 中的 Port 概念, 其由多个 ovsdb 中的 interface 组成 */
 
 /* Registers a "bundle" associated with client data pointer 'aux' in 'ofproto'.
  * A bundle is the same concept as a Port in OVSDB, that is, it consists of one
@@ -6171,14 +6171,14 @@ handle_flow_mod(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     ofpbuf_use_stub(&ofpacts, ofpacts_stub, sizeof ofpacts_stub);
-    error = ofputil_decode_flow_mod(&fm, oh, ofconn_get_protocol(ofconn),
+    error = ofputil_decode_flow_mod(&fm, oh, ofconn_get_protocol(ofconn),	// 解码
                                     ofproto_get_tun_tab(ofproto),
                                     &ofproto->vl_mff_map, &ofpacts,
                                     u16_to_ofp(ofproto->max_ports),
                                     ofproto->n_tables);
     if (!error) {
         struct openflow_mod_requester req = { ofconn, oh };
-        error = handle_flow_mod__(ofproto, &fm, &req);
+        error = handle_flow_mod__(ofproto, &fm, &req);	// 核心
         minimatch_destroy(&fm.match);
     }
 
@@ -8486,13 +8486,13 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
         return handle_set_config(ofconn, oh);
 
     case OFPTYPE_PACKET_OUT:
-        return handle_packet_out(ofconn, oh);
+        return handle_packet_out(ofconn, oh);	// 这里面携带了 flow 的
 
     case OFPTYPE_PORT_MOD:
         return handle_port_mod(ofconn, oh);
 
     case OFPTYPE_FLOW_MOD:
-        return handle_flow_mod(ofconn, oh);
+        return handle_flow_mod(ofconn, oh);	// 修改 flow
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);
@@ -8656,6 +8656,7 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
     }
 }
 
+// 处理从 controller 接收的消息
 static void
 handle_openflow(struct ofconn *ofconn, const struct ovs_list *msgs)
     OVS_EXCLUDED(ofproto_mutex)

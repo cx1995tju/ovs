@@ -796,7 +796,7 @@ udpif_upcall_handler(void *arg)
             dpif_recv_wait(udpif->dpif, handler->handler_id); //等待upcall消息
             latch_wait(&udpif->exit_latch); //等待exit消息
         }
-        poll_block();
+        poll_block();	// ovs-dpdk 场景中永远 block 在这里。ovs-dpdk 场景中 userspace 的datapath 直接通过 fast_path_processing ->* upcall_cb 就处理了 upcall了
     }
 
     return NULL;
@@ -1337,7 +1337,7 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
 }
 
 static int
-upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,
+upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,	// userspace 处理 upcall 的报文。即 megaflow miss 的报文
           unsigned pmd_id, enum dpif_upcall_type type,
           const struct nlattr *userdata, struct ofpbuf *actions,
           struct flow_wildcards *wc, struct ofpbuf *put_actions, void *aux)

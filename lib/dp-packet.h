@@ -111,7 +111,7 @@ enum dp_packet_offload_mask {
  */
 struct dp_packet {
 #ifdef DPDK_NETDEV
-    struct rte_mbuf mbuf;       /* DPDK mbuf */
+    struct rte_mbuf mbuf;       /* DPDK mbuf */	// must be the first member for DPDK
 #else
     void *base_;                /* First byte of allocated space. */
     uint16_t allocated_;        /* Number of bytes allocated. */

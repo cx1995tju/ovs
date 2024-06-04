@@ -285,7 +285,7 @@ struct netdev_class {
      *
      * 'netdev_class' points to the class.  It is useful in case the same
      * function is used to implement different classes. */
-    void (*wait)(const struct netdev_class *netdev_class);	// ??????
+    void (*wait)(const struct netdev_class *netdev_class);	// 如果实现了 run 函数，需要周期性运行。为了以防万一，主线程在poll_block() 堵死, 可以在这里添加一些事件。来唤醒主线程。 refer to: ovs-vswitchd.c:main()
 
 /* ## ---------------- ## */
 /* ## netdev Functions ## */
@@ -368,7 +368,7 @@ struct netdev_class {
      * been sent anyway.
      *
      * The caller transfers ownership of all the packets to the network
-     * device, regardless of success.
+     * device, regardless of success.	// 不管发送是否成功，ownership of packet 都给到了 netdev 了
      *
      * If 'concurrent_txq' is true, the caller may perform concurrent calls
      * to netdev_send() with the same 'qid'. The netdev provider is responsible
@@ -776,7 +776,7 @@ struct netdev_class {
     /* If the provider called netdev_request_reconfigure(), the upper layer
      * will eventually call this.  The provider can update the device
      * configuration knowing that the upper layer will not call rxq_recv() or
-     * send() until this function returns.
+     * send() until this function returns.	// 有时候不能直接去 reconfigure 一个 netdev，因为不知道 datapath 现在是不是在使用。只能 request_reconf a netdev。等待后续 upper 通过这个函数真的完成 reconf。当 upper 调用到这里的时候，可以确保当前没有使用这个设备的
      *
      * On error, the configuration is indeterminant and the device cannot be
      * used to send and receive packets until a successful configuration is

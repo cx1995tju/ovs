@@ -1302,7 +1302,7 @@ ofconn_run(struct ofconn *ofconn,
     for (size_t i = 0; i < N_SCHEDULERS; i++) {
         struct ovs_list txq;
 
-        pinsched_run(ofconn->schedulers[i], &txq);
+        pinsched_run(ofconn->schedulers[i], &txq);	// 先发送一些消息？？？
         do_send_packet_ins(ofconn, &txq);
     }
 
@@ -1310,7 +1310,7 @@ ofconn_run(struct ofconn *ofconn,
 
     /* Limit the number of iterations to avoid starving other tasks. */
     for (int i = 0; i < 50 && ofconn_may_recv(ofconn); i++) {
-        struct ofpbuf *of_msg = rconn_recv(ofconn->rconn);
+        struct ofpbuf *of_msg = rconn_recv(ofconn->rconn);	// 接收消息
         if (!of_msg) {
             break;
         }
@@ -1320,13 +1320,13 @@ ofconn_run(struct ofconn *ofconn,
         }
 
         struct ovs_list msgs;
-        enum ofperr error = ofpmp_assembler_execute(&ofconn->assembler, of_msg,
+        enum ofperr error = ofpmp_assembler_execute(&ofconn->assembler, of_msg,	// 组装消息？？？
                                                     &msgs, time_msec());
         if (error) {
             ofconn_send_error(ofconn, of_msg->data, error);
             ofpbuf_delete(of_msg);
         } else if (!ovs_list_is_empty(&msgs)) {
-            handle_openflow(ofconn, &msgs);
+            handle_openflow(ofconn, &msgs);	// 处理消息
             ofpbuf_list_delete(&msgs);
         }
     }

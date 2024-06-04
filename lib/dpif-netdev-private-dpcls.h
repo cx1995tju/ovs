@@ -36,10 +36,11 @@ struct dpcls_rule;
 struct dpcls;
 
 /* Must be public as it is instantiated in subtable struct below. */
+// miniflow
 struct netdev_flow_key {
     uint32_t hash;       /* Hash function differs for different users. */
     uint32_t len;        /* Length of the following miniflow (incl. map). */
-    struct miniflow mf;
+    struct miniflow mf;	// 节省 flow 的空间
     uint64_t buf[FLOW_MAX_PACKET_U64S];
 };
 

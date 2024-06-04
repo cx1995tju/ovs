@@ -1204,7 +1204,7 @@ port_configure(struct port *port)
     const struct ovsrec_port *cfg = port->cfg;
     struct bond_settings bond_settings;
     struct lacp_settings lacp_settings;
-    struct ofproto_bundle_settings s;
+    struct ofproto_bundle_settings s;	// 用来收集各种信息
     struct iface *iface;
 
     /* Get name. */
@@ -1214,7 +1214,7 @@ port_configure(struct port *port)
     s.n_members = 0;
     s.members = xmalloc(ovs_list_size(&port->ifaces) * sizeof *s.members);
     LIST_FOR_EACH (iface, port_elem, &port->ifaces) {
-        s.members[s.n_members++] = iface->ofp_port;
+        s.members[s.n_members++] = iface->ofp_port;	// 收集 members 信息
     }
 
     /* Get VLAN tag. */
@@ -1292,8 +1292,8 @@ port_configure(struct port *port)
     }
 
     /* Get bond settings. */
-    if (s.n_members > 1) {
-        s.bond = &bond_settings;
+    if (s.n_members > 1) {	// member > 1 说明要做 bond 设置
+        s.bond = &bond_settings;	// 需要额外收集 bond 的信息
         port_configure_bond(port, &bond_settings);
     } else {
         s.bond = NULL;
@@ -3267,9 +3267,8 @@ bridge_run__(void)
     }
 }
 
-//1. 处理数据库的变更, 譬如：ovs-vsctl 工具的设置, 这里可能修改网络拓扑
-//2. 处理ovs-ofctl
-//3. 与controller关于openflow的交互
+//- 同步数据库内容，操作 ofproto 交换机
+//- 周期性运行 ofproto_run
 void
 bridge_run(void)
 {
@@ -3340,7 +3339,7 @@ bridge_run(void)
         stream_ssl_set_ca_cert_file(ssl->ca_cert, ssl->bootstrap_ca_cert);
     }
 
-    if (ovsdb_idl_get_seqno(idl) != idl_seqno || //数据库发生变化，才会进入这里的
+    if (ovsdb_idl_get_seqno(idl) != idl_seqno || //数据库发生变化，才会进入这里的 //   // 这里是核心，在同步数据库的内容
         if_notifier_changed(ifnotifier)) {
         struct ovsdb_idl_txn *txn;
 

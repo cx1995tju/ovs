@@ -39,6 +39,7 @@ bool bond_mode_from_string(enum bond_mode *, const char *);
 const char *bond_mode_to_string(enum bond_mode);
 
 /* Configuration for a bond as a whole. */
+// 收集各种 bond 设置
 struct bond_settings {
     char *name;                 /* Bond's name, for log messages. */
     uint32_t basis;             /* Flow hashing basis. */

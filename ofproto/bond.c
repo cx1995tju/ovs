@@ -443,7 +443,7 @@ bond_reconfigure(struct bond *bond, const struct bond_settings *s)
             free(bond->name);
         }
         bond->name = xstrdup(s->name);
-        hmap_insert(all_bonds, &bond->hmap_node, hash_string(bond->name, 0));
+        hmap_insert(all_bonds, &bond->hmap_node, hash_string(bond->name, 0));	// bond 注册到 all_bonds list 中
     }
 
     bond->updelay = s->up_delay;

@@ -439,6 +439,9 @@ enum port_priority_tags_mode {
 
 /* The behaviour of the port regarding priority tags */
 /* Configuration of bundles. */
+// 用来收集各种信息
+// /* Bundles. 就是 ovsdb 中的 Port 概念, 其由多个 ovsdb 中的 interface 组成 */
+// refer to ofproto_bundle_register
 struct ofproto_bundle_settings {
     char *name;                 /* For use in log messages. */
 

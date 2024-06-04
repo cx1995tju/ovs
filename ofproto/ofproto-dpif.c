@@ -85,6 +85,7 @@ static void rule_get_stats(struct rule *, struct pkt_stats *stats,
 static struct rule_dpif *rule_dpif_cast(const struct rule *);
 static void rule_expire(struct rule_dpif *, long long now);
 
+// 就是 ovsdb 中的port 概念，不过其对应的 interface 有多个
 struct ofbundle {
     struct hmap_node hmap_node; /* In struct ofproto's "bundles" hmap. */
     struct ofproto_dpif *ofproto; /* Owning ofproto. */
@@ -281,7 +282,7 @@ init(const struct shash *iface_hints)
         new_hint->br_type = xstrdup(orig_hint->br_type);
         new_hint->ofp_port = orig_hint->ofp_port;
 
-        shash_add(&init_ofp_ports, node->name, new_hint);
+        shash_add(&init_ofp_ports, node->name, new_hint);	// 主要就是将 iface 信息保存到 hash 表中
     }
 
     ofproto_unixctl_init(); //注册了一些ovs-appctl的命令参数
@@ -292,13 +293,13 @@ init(const struct shash *iface_hints)
 static void
 enumerate_types(struct sset *types)
 {
-    dp_enumerate_types(types);
+    dp_enumerate_types(types);	// 调用底层函数去拿 datapath type
 }
 
 static int
 enumerate_names(const char *type, struct sset *names)
-{
-    struct ofproto_dpif *ofproto;
+{	
+    struct ofproto_dpif *ofproto;	// 委托给底层的 dpif 层
 
     sset_clear(names);
     //获取所有的ofproto的名字
@@ -319,7 +320,7 @@ del(const char *type, const char *name)
     struct dpif *dpif;
     int error;
 
-    error = dpif_open(name, type, &dpif);
+    error = dpif_open(name, type, &dpif);	// 先看看设备存不存在。然后 delete
     if (!error) {
         error = dpif_delete(dpif);
         dpif_close(dpif);
@@ -330,7 +331,7 @@ del(const char *type, const char *name)
 static const char *
 port_open_type(const char *datapath_type, const char *port_type)
 {
-    return dpif_port_open_type(datapath_type, port_type);
+    return dpif_port_open_type(datapath_type, port_type);	// 委托给底层了
 }
 
 /* Type functions. */
@@ -358,7 +359,7 @@ lookup_ofproto_dpif_by_port_name(const char *name)
 
 //主要是启动一些handlers线程，处理来自内核datapath的消息
 static int
-type_run(const char *type)
+type_run(const char *type)	// 一些周期性的任务
 {
     struct dpif_backer *backer;
 
@@ -666,7 +667,7 @@ type_wait(const char *type)
         return;
     }
 
-    dpif_wait(backer->dpif);
+    dpif_wait(backer->dpif);	// 委托给底层咯
 }
 
 /* Basic life-cycle. */
@@ -3193,7 +3194,7 @@ bundle_add_port(struct ofbundle *bundle, ofp_port_t ofp_port,
         }
 
         port->bundle = bundle;
-        ovs_list_push_back(&bundle->ports, &port->bundle_node);
+        ovs_list_push_back(&bundle->ports, &port->bundle_node);	// port 加入到 bundle->porst 中了
         if (port->up.pp.config & OFPUTIL_PC_NO_FLOOD
             || netdev_get_pt_mode(port->up.netdev) == NETDEV_PT_LEGACY_L3
             || (bundle->ofproto->stp && !stp_forward_in_state(port->stp_state))
@@ -3255,7 +3256,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     size_t i;
     bool ok;
 
-    bundle = bundle_lookup(ofproto, aux);
+    bundle = bundle_lookup(ofproto, aux);	// aux 在这里就是一个port指针, 做 key 使用的
 
     if (!s) {
         bundle_destroy(bundle);
@@ -3265,7 +3266,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     ovs_assert(s->n_members == 1 || s->bond != NULL);
     ovs_assert((s->lacp != NULL) == (s->lacp_members != NULL));
 
-    if (!bundle) {
+    if (!bundle) {	//不存在就先创建
         bundle = xmalloc(sizeof *bundle);
 
         bundle->ofproto = ofproto;
@@ -3294,6 +3295,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         bundle->name = xstrdup(s->name);
     }
 
+    // 使用各种 bundle_setting, 来做各种操作
     /* LACP. */
     if (s->lacp) {
         ofproto->lacp_enabled = true;
@@ -3310,7 +3312,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
     /* Update set of ports. */
     ok = true;
     for (i = 0; i < s->n_members; i++) {
-        if (!bundle_add_port(bundle, s->members[i],
+        if (!bundle_add_port(bundle, s->members[i],	// 添加 port 到 bundle
                              s->lacp ? &s->lacp_members[i] : NULL)) {
             ok = false;
         }
@@ -3325,14 +3327,14 @@ bundle_set(struct ofproto *ofproto_, void *aux,
                 }
             }
 
-            bundle_del_port(port);
+            bundle_del_port(port);	// 没有找到就移除掉 bundle->ports 中 stale 的 port
         found: ;
         }
     }
     ovs_assert(ovs_list_size(&bundle->ports) <= s->n_members);
 
     if (ovs_list_is_empty(&bundle->ports)) {
-        bundle_destroy(bundle);
+        bundle_destroy(bundle);	// 如果整个bundle 都没有 port 了就destroy 掉 bundle
         return EINVAL;
     }
 
@@ -3421,7 +3423,7 @@ bundle_set(struct ofproto *ofproto_, void *aux,
         free(cvlans);
     }
 
-    /* Bonding. */
+    /* Bonding. */	// 继续处理 bond
     if (!ovs_list_is_short(&bundle->ports)) {
         bundle->ofproto->has_bonded_bundles = true;
         if (bundle->bond) {
@@ -3429,12 +3431,12 @@ bundle_set(struct ofproto *ofproto_, void *aux,
                 ofproto->backer->need_revalidate = REV_RECONFIGURE;
             }
         } else {
-            bundle->bond = bond_create(s->bond, ofproto);
+            bundle->bond = bond_create(s->bond, ofproto);	// 没有 bond 结构就先创建 bond
             ofproto->backer->need_revalidate = REV_RECONFIGURE;
         }
 
         LIST_FOR_EACH (port, bundle_node, &bundle->ports) {
-            bond_member_register(bundle->bond, port,
+            bond_member_register(bundle->bond, port,	// bond 中添加 member
                                  port->up.ofp_port, port->up.netdev);
         }
     } else {
