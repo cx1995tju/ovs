@@ -308,7 +308,7 @@
  * Typical Usage
  * =============
  *
- * Typically, the client of a datapath begins by configuring the datapath with
+ * Typically, the client of a datapath begins by configuring the datapath with	// client 将 datapath 配置好之后, 就让 datapath 去 run, client 做自己的事情, 同时 polling datapath 有没有 upcall 过来就可以了
  * a set of ports.  Afterward, the client runs in a loop polling for upcalls to
  * arrive.
  *
@@ -592,6 +592,7 @@ void dpif_flow_dump_thread_destroy(struct dpif_flow_dump_thread *);
 #define PMD_ID_NULL OVS_CORE_UNSPEC
 
 /* A datapath flow as dumped by dpif_flow_dump_next(). */
+// 仅仅 dump 用的, 数据面不会直接用这个
 struct dpif_flow {
     const struct nlattr *key;     /* Flow key, as OVS_KEY_ATTR_* attrs. */
     size_t key_len;               /* 'key' length in bytes. */

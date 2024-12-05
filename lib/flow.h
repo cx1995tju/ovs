@@ -278,7 +278,7 @@ typedef unsigned long long map_t;
 #define FLOWMAP_UNITS DIV_ROUND_UP(FLOW_U64S, MAP_T_BITS)
 
 struct flowmap {
-    map_t bits[FLOWMAP_UNITS];
+    map_t bits[FLOWMAP_UNITS]; // 每个 元素是 8Byte(64b), 每个 bit 对应 flow 这个结构的 8Byte, 所以一个元素 就能对应 64b * 8B = 512Byte 
 };
 
 #define FLOWMAP_EMPTY_INITIALIZER { { 0 } }
@@ -514,8 +514,19 @@ flowmap_next_index(struct flowmap_aux *aux, size_t *idx)
  *
  * A miniflow is always dynamically allocated so that the maps are followed by
  * at least as many elements as there are 1-bits in maps. */
+
+// miniflow 里的 每个 bit 对应 flow 这个结构的一个 uint64_t (8Byte)
+// - 一个 bit 为 0 的话, 表示, flow 里的那 u64 是 0
+// - 对于那些 bit 不为 0 的 u64, 会将其 value 保存在 map 后面的内存里
+//
+// 综上: miniflow 就是 flow 这个结构的压缩表示, 压缩的基本单位是 u64, 使用 map 这个 bitmap 来表示哪些 u64 是0
+// 对于非 0 的 bit, 则将其 value 按照顺序保存到 map 这个成员后面的内存里
+//
+//
+// 注意: miniflow 虽然是 flow 结构的压缩表示, 但是构造这个结构的时候是直接从 packet 里提取信息构造的
+// 而 struct flow 结构, 则是 flow miss 后 handle_packet_upcall() 的时候, 调用 dp_netdev_flow_add() 创建的
 struct miniflow {
-    struct flowmap map;
+    struct flowmap map; // 一个 bitmap 咯
     /* Followed by:
      *     uint64_t values[n];
      * where 'n' is miniflow_n_values(miniflow). */
@@ -564,7 +575,7 @@ static inline uint64_t *flow_u64_lvalue(struct flow *flow, size_t index)
 static inline size_t
 miniflow_n_values(const struct miniflow *flow)
 {
-    return flowmap_n_1bits(flow->map);
+    return flowmap_n_1bits(flow->map); // 计算 flow->map 这个 bitmap 里有几个 bit 是 1
 }
 
 struct flow_for_each_in_maps_aux {

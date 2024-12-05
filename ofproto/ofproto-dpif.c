@@ -282,7 +282,7 @@ init(const struct shash *iface_hints)
         new_hint->br_type = xstrdup(orig_hint->br_type);
         new_hint->ofp_port = orig_hint->ofp_port;
 
-        shash_add(&init_ofp_ports, node->name, new_hint);	// 主要就是将 iface 信息保存到 hash 表中
+        shash_add(&init_ofp_ports, node->name, new_hint);	// 主要就是将 iface 信息保存到 hash 表中, 在 ofproto-dpif 层又保存一份, 注意: ofproto_init() 在 ofproto 已经保存了一份了
     }
 
     ofproto_unixctl_init(); //注册了一些ovs-appctl的命令参数
@@ -363,13 +363,14 @@ type_run(const char *type)	// 一些周期性的任务
 {
     struct dpif_backer *backer;
 
-    backer = shash_find_data(&all_dpif_backers, type); //根据type从这个全局便利里找backer, system 和 netdev都会创建一个
+    backer = shash_find_data(&all_dpif_backers, type); //根据type从这个全局变量里找backer, system 和 netdev都会创建一个
     if (!backer) {
         /* This is not necessarily a problem, since backers are only
          * created on demand. */
         return 0;
     }
 
+    // 每个 type 的 dpif 都要在这里 run 一些周期性的工作
     if (dpif_run(backer->dpif)) { //%dpif_netlink_run %dpif_netdev_run , backer能够索引到dpif_class
         backer->need_revalidate = REV_RECONFIGURE;
     }
@@ -6781,7 +6782,7 @@ const struct ofproto_class ofproto_dpif_class = {
     enumerate_names,
     del,
     port_open_type,
-    type_run,
+    type_run, // for type in enumerate_types()
     type_wait,
     alloc,
     construct,

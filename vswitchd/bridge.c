@@ -372,19 +372,23 @@ bridge_init_ofproto(const struct ovsrec_open_vswitch *cfg)
         return;
     }
 
+    // hash 表, 保存了数据库里所有的 interface
+    // index 是 interface 的 name
+    // val 是 struct iface_hint 结构
     shash_init(&iface_hints);
 
     if (cfg) {
+	    // 遍历 bridge 的 所有 port
         for (i = 0; i < cfg->n_bridges; i++) { //将配置的所有interface插入到iface_hints
-            const struct ovsrec_bridge *br_cfg = cfg->bridges[i];
+            const struct ovsrec_bridge *br_cfg = cfg->bridges[i]; // 表示 bridge 表的一行
             int j;
 
             for (j = 0; j < br_cfg->n_ports; j++) {
-                struct ovsrec_port *port_cfg = br_cfg->ports[j];
+                struct ovsrec_port *port_cfg = br_cfg->ports[j]; // 表示 port 表的一行
                 int k;
 
                 for (k = 0; k < port_cfg->n_interfaces; k++) {
-                    struct ovsrec_interface *if_cfg = port_cfg->interfaces[k];
+                    struct ovsrec_interface *if_cfg = port_cfg->interfaces[k]; // 表示 interface 表的一行
                     struct iface_hint *iface_hint;
 
                     iface_hint = xmalloc(sizeof *iface_hint);
@@ -787,6 +791,7 @@ dp_capability_reconfigure(struct datapath *dp,
     smap_destroy(&cap);
 }
 
+// 具体的 reconfigure 工作在 reconfigure_datapath() 函数里
 static void
 datapath_reconfigure(const struct ovsrec_open_vswitch *cfg)
 {
@@ -802,7 +807,7 @@ datapath_reconfigure(const struct ovsrec_open_vswitch *cfg)
             dp = datapath_create(dp_name);
             dp_capability_reconfigure(dp, dp_cfg);
         }
-        dp->last_used = idl_seqno;
+        dp->last_used = idl_seqno; // 这里仅仅是设置了下 last_used 号
         ct_zones_reconfigure(dp, dp_cfg);
     }
 
@@ -872,7 +877,7 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
     //删除不需要的ports
     HMAP_FOR_EACH (br, node, &all_bridges) {
         if (br->ofproto) {
-            bridge_delete_or_reconfigure_ports(br);
+            bridge_delete_or_reconfigure_ports(br); // 配置 bridge 上的 port
         }
     }
 
@@ -883,10 +888,10 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
      *     - Add ports that are missing. */
     //为每个bridge创建对应的ofproto
     HMAP_FOR_EACH_SAFE (br, next, node, &all_bridges) {
-        if (!br->ofproto) {
+        if (!br->ofproto) { // 没有 ofproto 的 bridge 就创建下 ofproto
             int error;
 
-            error = ofproto_create(br->name, br->type, &br->ofproto); //是不是又要创建一个openflow交换机, 创建缺少的ofproto
+            error = ofproto_create(br->name, br->type, &br->ofproto);
             if (error) {
                 VLOG_ERR("failed to create bridge %s: %s", br->name,
                          ovs_strerror(error));
@@ -910,6 +915,8 @@ bridge_reconfigure(const struct ovsrec_open_vswitch *ovs_cfg)
     }
 
     reconfigure_system_stats(ovs_cfg);
+
+    /* XXX: __HERE IT IS__ */
     datapath_reconfigure(ovs_cfg); //datapath的reconfigure
 
     /* Complete the configuration. */
@@ -3249,19 +3256,21 @@ status_update_wait(void)
 static void
 bridge_run__(void)
 {
+	// 调用 ofproto.c 里的 tun 函数咯
     struct bridge *br;
     struct sset types;
     const char *type;
 
     /* Let each datapath type do the work that it needs to do. */
     sset_init(&types);
-    ofproto_enumerate_types(&types); //获取所有的type，目前只有两种system netdev
+    ofproto_enumerate_types(&types); //获取所有的type，目前只有两种 system netdev // dpif_netlink_class, dpif_netdev_class
     SSET_FOR_EACH (type, &types) {
         ofproto_type_run(type);  //每种类型的type_run
     }
     sset_destroy(&types);
 
     /* Let each bridge do the work that it needs to do. */
+    // bridge.c 的主要工作就是遍历 all_bridges list, 然后去 run 每个 bridges
     HMAP_FOR_EACH (br, node, &all_bridges) { //对于每个ofproto都调用ofproto_run
         ofproto_run(br->ofproto);//ofproto_run中的p->ofproto_class->run(p)上的run函数依次调用 %dpif_run() 处理所有注册的netlink notifier汇报事件，run_fast处理常见的周期事件，包括upcalls的处理 %dpif_netdev_run。 openflow交换机运行
     }
@@ -3272,16 +3281,16 @@ bridge_run__(void)
 void
 bridge_run(void)
 {
-    static struct ovsrec_open_vswitch null_cfg;
-    const struct ovsrec_open_vswitch *cfg; // cfg 的首元素表示该 table 的一行
+    static struct ovsrec_open_vswitch null_cfg; // ovsrec_open_vswitch 表示 open_vswitch 这个表的一行
+    const struct ovsrec_open_vswitch *cfg; // cfg 的元素表示该 table 的一行
 
     ovsrec_open_vswitch_init(&null_cfg); //  // 打开并建立 open_vswitch 表 ctx
 
     ovsdb_idl_run(idl); // 启动了和数据库交互的通道了
 
-    if_notifier_run();
+    if_notifier_run();	// neltink 内核通道
 
-    if (ovsdb_idl_is_lock_contended(idl)) {
+    if (ovsdb_idl_is_lock_contended(idl)) { // ovsdb-server 被别的 client 锁上了
         static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
         struct bridge *br, *next_br;
 
@@ -3315,7 +3324,7 @@ bridge_run(void)
      * it must be done after the configuration is set.  If the
      * initialization has already occurred, bridge_init_ofproto()
      * returns immediately. */
-    bridge_init_ofproto(cfg); //初始化ofproto, 注册ofproto_class
+    bridge_init_ofproto(cfg); //初始化ofproto, 注册ofproto_class, cfg 就是 open_vswitch 表中记录的配置信息咯
 
     /* Once the value of flow-restore-wait is false, we no longer should
      * check its value from the database. */
@@ -3339,16 +3348,19 @@ bridge_run(void)
         stream_ssl_set_ca_cert_file(ssl->ca_cert, ssl->bootstrap_ca_cert);
     }
 
+    // 第一次调用  bridge_run() 的时候, 会进入这个分支么? 会进入, ref: osvdb_idl_get_seqno() comments
     if (ovsdb_idl_get_seqno(idl) != idl_seqno || //数据库发生变化，才会进入这里的 //   // 这里是核心，在同步数据库的内容
         if_notifier_changed(ifnotifier)) {
         struct ovsdb_idl_txn *txn;
 
         idl_seqno = ovsdb_idl_get_seqno(idl);
         txn = ovsdb_idl_txn_create(idl);
+	// 只要发生变化就进来对所有的参数都会重新设置一次的
+	// __最重要的地方咯, 在这里对 bridge 做各种配置, 包括 datapath 的配置, 然后就让 datapath 自己去 run__
         bridge_reconfigure(cfg ? cfg : &null_cfg); //这里需要根据数据库的配置，可能做一些reconfgiure, cfg就是数据库配置, 主要是做控制面的配置等操作
 
         if (cfg) {
-            ovsrec_open_vswitch_set_cur_cfg(cfg, cfg->next_cfg);
+            ovsrec_open_vswitch_set_cur_cfg(cfg, cfg->next_cfg); // cfg 这一样的 cur_cfg 这一列的值修改为 next_cfg, 这样 ovsdb server 才知道ovs-vswitchd 处理完了
             discover_types(cfg);
         }
 

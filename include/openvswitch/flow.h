@@ -97,6 +97,7 @@ BUILD_ASSERT_DECL(FLOW_MAX_VLAN_HEADERS % 2 == 0);
  * NOTE: Order of the fields is significant, any change in the order must be
  * reflected in miniflow_extract()!
  */
+// openflow 的 key
 struct flow {
     /* Metadata */
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. */
@@ -123,7 +124,7 @@ struct flow {
     ovs_be16 dl_type;           /* Ethernet frame type.
                                    Note: This also holds the Ethertype for L3
                                    packets of type PACKET_TYPE(1, Ethertype) */
-    uint8_t pad1[2];            /* Pad to 64 bits. */
+    uint8_t pad1[2];            /* Pad to 64 bits. */	// 很重要, ref: `struct miniflow`
     union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS]; /* VLANs */
     ovs_be32 mpls_lse[ROUND_UP(FLOW_MAX_MPLS_LABELS, 2)]; /* MPLS label stack
                                                              (with padding). */

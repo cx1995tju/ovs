@@ -50,7 +50,7 @@ struct dp_netdev_pmd_thread_ctx {
     /* RX queue from which last packet was received. */
     struct dp_netdev_rxq *last_rxq;
     /* EMC insertion probability context for the current processing cycle. */
-    uint32_t emc_insert_min;
+    uint32_t emc_insert_min; // ref: emc_probabilistic_insert()
     /* Enable the SMC cache from ovsdb config. */
     bool smc_enable_db;
 };
@@ -78,9 +78,9 @@ struct dp_netdev_pmd_thread_ctx {
  * actions in either case.
  * */
 //dp: datapath
-//netdev: 不是开头的netdev表示dpdk
 //pmd_thread
 //综上：这个结构表示一个dpdk类型的datapath的pmd thread
+// 主线程会作为 nonpmd 也有一个这个结构: dp_netdev_set_nonpmd(), 而且主线程的static_tx_qid 是 0
 struct dp_netdev_pmd_thread {
     struct dp_netdev *dp; //表示基于dpdk 的 datapath, 一个datapath可能有很多thread的
     struct ovs_refcount ref_cnt;    /* Every reference must be refcount'ed. */
@@ -90,7 +90,7 @@ struct dp_netdev_pmd_thread {
      * NON_PMD_CORE_ID can be accessed by multiple threads, and thusly
      * need to be protected by 'non_pmd_mutex'.  Every other instance
      * will only be accessed by its own pmd thread. */
-    OVS_ALIGNED_VAR(CACHE_LINE_SIZE) struct dfc_cache flow_cache; //保存emc, per-thread的
+    OVS_ALIGNED_VAR(CACHE_LINE_SIZE) struct dfc_cache flow_cache; //保存emc, per-pmd 的
 
     /* Flow-Table and classifiers
      *
@@ -99,10 +99,11 @@ struct dp_netdev_pmd_thread {
      * 'flow_mutex'.
      */
     struct ovs_mutex flow_mutex;
-    struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd
+    struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd, 保存的是 dp_netdev_flow 结构
 
     /* One classifier per in_port polled by the pmd */
-    struct cmap classifiers;	// per-in_port
+    // 每个 in_port 有一个 megaflow 的表
+    struct cmap classifiers;	// per-in_port  struct dpcls 结构挂在这里
     /* Periodically sort subtable vectors according to hit frequencies */
     long long int next_optimization;
     /* End of the next time interval for which processing cycles
@@ -184,6 +185,8 @@ struct dp_netdev_pmd_thread {
     /* Queue id used by this pmd thread to send packets on all netdevs if
      * XPS disabled for this netdev. All static_tx_qid's are unique and less
      * than 'cmap_count(dp->poll_threads)'. */
+    // 如果 port 支持的 queue 数目小于 static_tx_qid 怎么办 ? 那就必须开启 struct tx_port.dynamic_txqs
+    // nonpmd 主线程的 static_tx_qid 是 0, ref: dp_netdev_set_nonpmd()
     uint32_t static_tx_qid;
 
     /* Number of filled output batches. */
@@ -191,10 +194,15 @@ struct dp_netdev_pmd_thread {
 
     struct ovs_mutex port_mutex;    /* Mutex for 'poll_list' and 'tx_ports'. */
     /* List of rx queues to poll. */
-    struct hmap poll_list OVS_GUARDED; //需要polling 的rx queue
+    struct hmap poll_list OVS_GUARDED; //需要polling 的rx queue, 这个结构 main thread 会访问的, 所以在数据面不会直接使用其中的信息, 而是会 copy 其中的信息到局部变量使用, ref: pmd_load_queues_and_ports()
     /* Map of 'tx_port's used for transmission.  Written by the main thread,
      * read by the pmd thread. */
-    struct hmap tx_ports OVS_GUARDED; //需要transmit的tx port
+    // 每个 pmd 都需要有能力将 pkt 发送给所有的 tx_ports, 所以会将 tx_port 挂载到这里
+    // 只有使用 tx_port 的哪个 q, 分两种情况: ref: dp_netdev_pmd_flush_output_on_port
+    // - 支持 dynamic_txqs 的话, 就使用 tx->tx_qid
+    // - 不支持的话, 则使用 static_tx_qid, 这时候显然:
+    //         - 所有 pmd 的 static_tx_qid 不能一样
+    struct hmap tx_ports OVS_GUARDED; //需要transmit的tx port, 挂载的是 `struct tx_port` 结构, ref: dp_netdev_add_port_tx_to_pmd()
 
     struct ovs_mutex bond_mutex;    /* Protects updates of 'tx_bonds'. */
     /* Map of 'tx_bond's used for transmission.  Written by the main thread
@@ -211,7 +219,7 @@ struct dp_netdev_pmd_thread {
      * The instances for cpu core NON_PMD_CORE_ID can be accessed by multiple
      * threads, and thusly need to be protected by 'non_pmd_mutex'.  Every
      * other instance will only be accessed by its own pmd thread. */
-    struct hmap tnl_port_cache;
+    struct hmap tnl_port_cache; // 为了性能问题(tx_ports 会被 main thread 访问的), 会将 tx_ports 中的信息 copy 到 tnl_port_cache / send_port_cache
     struct hmap send_port_cache;
 
     /* Keep track of detailed PMD performance statistics. */

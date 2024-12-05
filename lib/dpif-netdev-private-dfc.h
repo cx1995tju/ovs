@@ -111,6 +111,7 @@ struct smc_cache {
 
 struct dfc_cache {
     struct emc_cache emc_cache;
+    // emc 和 megaflow 之间的一层 subtable match cache
     struct smc_cache smc_cache;
 };
 

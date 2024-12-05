@@ -124,12 +124,13 @@ main(int argc, char *argv[])
             memory_report(&usage);
             simap_destroy(&usage);
         }
-        bridge_run(); //处理controller的交互, ovs-ofctl命令, 同步数据相关内容
+        bridge_run(); //处理controller的交互, ovs-ofctl命令, 同步数据相关内容, 核心中的核心
         unixctl_server_run(unixctl); 
         netdev_run(); //虚拟网卡的初始化, 监控网卡状态并更新, 譬如其他控制面更新了一些网卡的信息，会修改change_seq的，这里就能检测到，做具体操作netdev.change_seq %netdev_change_seq_changed 
 
+	// 各种 wait 函数就是控制后面的 poll_block 的唤醒时机的
         memory_wait();
-        bridge_wait();
+        bridge_wait(); // 这里肯定有一个兜底的 wait, 确保 poll_block() 不会卡死
         unixctl_server_wait(unixctl);
         netdev_wait();
         if (exiting) {

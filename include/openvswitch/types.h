@@ -1,4 +1,4 @@
-/*
+/* OFP: openflow protocol
  * Copyright (c) 2010, 2011, 2013, 2014, 2016, 2017 Nicira, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -150,7 +150,7 @@ typedef struct {
  * odp_port_t is a port number within a datapath (e.g. see lib/dpif.h).
  */
 typedef uint32_t OVS_BITWISE ofp_port_t;
-typedef uint32_t OVS_BITWISE odp_port_t;
+typedef uint32_t OVS_BITWISE odp_port_t; // datapath 使用的 port no
 typedef uint32_t OVS_BITWISE ofp11_port_t;
 
 /* Macro functions that cast int types to ofp/odp/ofp11 types. */

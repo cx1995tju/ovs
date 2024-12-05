@@ -70,6 +70,7 @@ void poll_timer_wait_until_at(long long int msec, const char *where);
 #define poll_timer_wait_until(msec)             \
     poll_timer_wait_until_at(msec, OVS_SOURCE_LOCATOR)
 
+// 调用了这个函数后再调用 poll_block 会马上被唤醒的
 void poll_immediate_wake_at(const char *where);
 #define poll_immediate_wake() poll_immediate_wake_at(OVS_SOURCE_LOCATOR)
 

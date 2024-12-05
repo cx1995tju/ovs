@@ -292,6 +292,7 @@ struct ofport_dpif *odp_port_to_ofport(const struct dpif_backer *, odp_port_t);
 
 /* A bridge based on a "dpif" datapath. */
 
+// 基于 lib/dpif 库实现的 bridge, 即 ofproto_dpif 表示一个 交换机, 这个交换机的 datapath 是 dpif
 struct ofproto_dpif {
     /* In 'all_ofproto_dpifs_by_name'. */
     struct hmap_node all_ofproto_dpifs_by_name_node;
@@ -299,7 +300,7 @@ struct ofproto_dpif {
     /* In 'all_ofproto_dpifs_by_uuid'. */
     struct hmap_node all_ofproto_dpifs_by_uuid_node;
 
-    struct ofproto up;
+    struct ofproto up;	// 基类
     struct dpif_backer *backer; //通过这个索引到dpif，进而索引到dpif_netlink dpif_netdev
 
     /* Unique identifier for this instantiation of this bridge in this running

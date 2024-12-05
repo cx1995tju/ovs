@@ -2495,7 +2495,7 @@ netdev_dpdk_rxq_recv(struct netdev_rxq *rxq, struct dp_packet_batch *batch,
     batch->count = nb_rx;
     dp_packet_batch_init_packet_fields(batch);
 
-    if (qfill) {
+    if (qfill) { // 只有 vhost场景, 这个 qfill 不是 NULL
         if (nb_rx == NETDEV_MAX_BURST) {
             *qfill = rte_eth_rx_queue_count(rx->port_id, rxq->queue_id);
         } else {

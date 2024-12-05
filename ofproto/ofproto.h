@@ -252,7 +252,7 @@ void ofproto_parse_name(const char *name, char **dp_name, char **dp_type);
 struct iface_hint {
     char *br_name;              /* Name of owning bridge. */
     char *br_type;              /* Type of owning bridge. */
-    ofp_port_t ofp_port;        /* OpenFlow port number. */
+    ofp_port_t ofp_port;        /* OpenFlow port number. */ // 应该由控制面来分配, 或者控制面授权 ovs 自己分配
 };
 
 void ofproto_init(const struct shash *iface_hints);

@@ -164,6 +164,11 @@ static struct odp_support dp_netdev_support = {
 /* Time in microseconds to try RCU quiescing. */
 #define PMD_RCU_QUIESCE_INTERVAL 10000LL
 
+// 组织 dpcls_subtable 的
+// 是一个 per in-port 的结构, 保存的是 megaflow
+// 其中的 megaflow 按照 mask 被组织成各种 subtable, 即 mask 相同的 megaflow 被组织在同一个 subtable 里
+//
+// 其中保存的 megaflow 是 non-overlapping 的, refe: dpcls_lookup
 struct dpcls {
     struct cmap_node node;      /* Within dp_netdev_pmd_thread.classifiers */
     odp_port_t in_port;
@@ -172,7 +177,7 @@ struct dpcls {
 };
 
 /* Data structure to keep packet order till fastpath processing. */
-struct dp_packet_flow_map {	// 记录 packet 和 flow 的对应关系？
+struct dp_packet_flow_map {	// 记录 packet 和 flow 的对应关系
     struct dp_packet *packet;
     struct dp_netdev_flow *flow;
     uint16_t tcp_flags;
@@ -251,7 +256,7 @@ enum sched_assignment_type {
  *
  *    不过对于ovs kernel是否是这样，不确定
  */
-//表示一个datapath，是基于dpdk的，或者 xdp 的
+//表示一个datapath，是基于 lib/netdev 库实现的
 struct dp_netdev {
     const struct dpif_class *const class; //%dpif_netdev_class, 各种函数集合
     const char *const name;
@@ -394,7 +399,7 @@ struct dp_netdev_rxq {
 //内核中的port概念要在datapath的vport中体现了
 struct dp_netdev_port {
     odp_port_t port_no;
-    bool dynamic_txqs;          /* If true XPS will be used. */
+    bool dynamic_txqs;          /* If true XPS will be used. */ //  // 如果一个设备 queue 小于 thread 的数目, 也就是每个 pmd 分配不到一个 q 的话, 就必须要启动 dynamic_txqs,  ref: reconfigure_datapath
     bool need_reconfigure;      /* True if we should reconfigure netdev. */
     struct netdev *netdev;
     struct hmap_node node;      /* Node in dp_netdev's 'ports'. */
@@ -459,7 +464,9 @@ struct tx_bond {
 };
 
 /* Interface to netdev-based datapath. */
-// 每个bridge都有一个这个结构，但是共享一个dp结构
+// 表示一个操作 netdev-based datapath 的接口
+// dpif 是其基类
+// dp_netdev 是 这个 netdev-based datapath 的实现中对 datapath 的抽象
 struct dpif_netdev {
     struct dpif dpif;
     struct dp_netdev *dp;
@@ -4682,6 +4689,7 @@ dp_netdev_pmd_flush_output_packets(struct dp_netdev_pmd_thread *pmd,
     return output_cnt;
 }
 
+// pmd 从 rxq 里接收报文并处理, port_no 是 datapath 使用的 port number
 static int
 dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
                            struct dp_netdev_rxq *rxq,
@@ -4726,8 +4734,9 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         }
 
         /* Process packet batch. */
-        int ret = pmd->netdev_input_func(pmd, &batch, port_no);	// 默认情况下，这里也是 dp_netdev_input
-        if (ret) {
+	// 去处理报文咯
+        int ret = pmd->netdev_input_func(pmd, &batch, port_no);	// 默认情况下，这里也是 %dp_netdev_input()
+        if (ret) { // 前面出错了, 那么就会退到 兜底的默认的函数处理下
             dp_netdev_input(pmd, &batch, port_no); //将报文传输给flow
         }
 
@@ -4735,6 +4744,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         cycles = cycle_timer_stop(&pmd->perf_stats, &timer);
         dp_netdev_rxq_add_cycles(rxq, RXQ_CYCLES_PROC_CURR, cycles);
 
+	// 前面根据 flow 处理完报文后, 需要 send 的报文已经 pmd 的 send queue 了, 这里去发送咯
         dp_netdev_pmd_flush_output_packets(pmd, false);	// 尝试发送报文
     } else {
         /* Discard cycles. */
@@ -5645,7 +5655,7 @@ reconfigure_pmd_threads(struct dp_netdev *dp)
 
             ds_put_format(&name, "pmd-c%02d/id:", core->core_id);
             pmd->thread = ovs_thread_create(ds_cstr(&name),
-                                            pmd_thread_main, pmd);
+                                            pmd_thread_main, pmd); // pmd 线程的创建就是这里
             ds_destroy(&name);
 
             VLOG_INFO("PMD thread on numa_id: %d, core id: %2d created.",
@@ -5701,6 +5711,8 @@ pmd_remove_stale_ports(struct dp_netdev *dp,
 /* Must be called each time a port is added/removed or the cmask changes.
  * This creates and destroys pmd threads, reconfigures ports, opens their
  * rxqs and assigns all rxqs/txqs to pmd threads. */
+
+// 很多地方有任何一点变化都需要 reconfigure_datapath 的, 所以这个函数被调用的地方很多
 static void
 reconfigure_datapath(struct dp_netdev *dp)
     OVS_REQUIRES(dp->port_mutex)
@@ -5858,11 +5870,11 @@ reconfigure_datapath(struct dp_netdev *dp)
      */
     CMAP_FOR_EACH (pmd, node, &dp->poll_threads) {
         ovs_mutex_lock(&pmd->port_mutex);
-        if (hmap_count(&pmd->poll_list) || pmd->core_id == NON_PMD_CORE_ID) {
+        if (hmap_count(&pmd->poll_list) || pmd->core_id == NON_PMD_CORE_ID) { // non pmd 不会 polling rxq , 但是会发送报文, 所以也要维持一个 tx_ports
             struct tx_bond *bond;
 
             HMAP_FOR_EACH (port, node, &dp->ports) {
-                dp_netdev_add_port_tx_to_pmd(pmd, port);
+                dp_netdev_add_port_tx_to_pmd(pmd, port); // 每个 pmd 都需要能够处理所有的 port
             }
 
             CMAP_FOR_EACH (bond, node, &dp->tx_bonds) {
@@ -5928,6 +5940,7 @@ variance(uint64_t a[], int n)
 }
 
 /* Return true if needs to revalidate datapath flows. */
+// 一些周期性的工作在这里
 static bool
 dpif_netdev_run(struct dpif *dpif)
 {
@@ -5948,7 +5961,7 @@ dpif_netdev_run(struct dpif *dpif)
         atomic_read_relaxed(&dp->smc_enable_db, &non_pmd->ctx.smc_enable_db);
 
         HMAP_FOR_EACH (port, node, &dp->ports) {
-            if (!netdev_is_pmd(port->netdev)) {
+            if (!netdev_is_pmd(port->netdev)) {	// 比如: netdev_tap_class
                 int i;
 
                 if (port->emc_enabled) {
@@ -6083,6 +6096,7 @@ pmd_load_cached_ports(struct dp_netdev_pmd_thread *pmd)
     hmap_shrink(&pmd->send_port_cache);
     hmap_shrink(&pmd->tnl_port_cache);
 
+    // 为了性能考虑将 tx_ports 里的 tx_port 信息 copy 一份
     HMAP_FOR_EACH (tx_port, node, &pmd->tx_ports) {
         if (netdev_has_tunnel_push_pop(tx_port->port->netdev)) {
             tx_port_cached = xmemdup(tx_port, sizeof *tx_port_cached);
@@ -6120,17 +6134,21 @@ pmd_free_static_tx_qid(struct dp_netdev_pmd_thread *pmd)
     ovs_mutex_unlock(&pmd->dp->tx_qid_pool_mutex);
 }
 
-//每个pmd需要polling哪些queue?
+// 收集需要 polling 的 rxq 信息 到 local 变量里
+// 收集可以用来 发送的 tx port 信息到 thread local 变量里
 static int
 pmd_load_queues_and_ports(struct dp_netdev_pmd_thread *pmd,
                           struct polled_queue **ppoll_list)
 {
+    // 这个赋值毫无意义
     struct polled_queue *poll_list = *ppoll_list;
     struct rxq_poll *poll;
     int i;
 
+    // 从 pmd 这个结构里收集需要 polling 的 rxq
+    // 也是性能考虑: 将 pmd->poll_list 这个 main thread 会访问的结构里的信息 copy 到 thread_local 里
     ovs_mutex_lock(&pmd->port_mutex);
-    poll_list = xrealloc(poll_list, hmap_count(&pmd->poll_list)
+    poll_list = xrealloc(poll_list, hmap_count(&pmd->poll_list) // 前面给 poll_list 赋值了, 这里又重新分配了, 毫无意义. realloc() 的地址可能变化的
                                     * sizeof *poll_list);
 
     i = 0;
@@ -6160,7 +6178,7 @@ pmd_load_queues_and_ports(struct dp_netdev_pmd_thread *pmd,
 static void *
 pmd_thread_main(void *f_)
 {
-    struct dp_netdev_pmd_thread *pmd = f_;
+    struct dp_netdev_pmd_thread *pmd = f_; // 一个 pmd 的所有都在这个结构里, 即一个 ovs-dpdk datapath 的 一个 work unit 的一切都在这里
     struct pmd_perf_stats *s = &pmd->perf_stats;
     unsigned int lc = 0;
     struct polled_queue *poll_list;
@@ -6175,10 +6193,10 @@ pmd_thread_main(void *f_)
     poll_list = NULL;
 
     /* Stores the pmd thread's 'pmd' to 'per_pmd_key'. */
-    ovsthread_setspecific(pmd->dp->per_pmd_key, pmd); //保存pmd指针
+    ovsthread_setspecific(pmd->dp->per_pmd_key, pmd); //保存pmd指针, pthread 提供了一些保存 thread specific 数据的能力
     ovs_numa_thread_setaffinity_core(pmd->core_id);
     dpdk_set_lcore_id(pmd->core_id); //设置线程绑定的lcore
-    poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list); //将pmd->poll_list存入到poll_list中，并返回polled_queue数目
+    poll_cnt = pmd_load_queues_and_ports(pmd, &poll_list);
     dfc_cache_init(&pmd->flow_cache);
     pmd_alloc_static_tx_qid(pmd);
 
@@ -6187,7 +6205,7 @@ reload: //后面的for循环，可能被跳出，然后goto reload，重新加�
 
     /* List port/core affinity */
     //打印
-    for (i = 0; i < poll_cnt; i++) {
+    for (i = 0; i < poll_cnt; i++) { // 需要 polling 的 rxq 数目
        VLOG_DBG("Core %d processing port \'%s\' with queue-id %d\n",
                 pmd->core_id, netdev_rxq_get_name(poll_list[i].rxq->rx),
                 netdev_rxq_get_queue_id(poll_list[i].rxq->rx));
@@ -6204,7 +6222,7 @@ reload: //后面的for循环，可能被跳出，然后goto reload，重新加�
             } while (!reload);
         } else {
             while (seq_read(pmd->reload_seq) == pmd->last_reload_seq) {
-                seq_wait(pmd->reload_seq, pmd->last_reload_seq);
+                seq_wait(pmd->reload_seq, pmd->last_reload_seq); // 设置一个唤醒源, 当你pmd->reaload_seq 的值 changes from pmd->last_relaod_seq 的时候会醒过来
                 poll_block();
             }
         }
@@ -6227,9 +6245,9 @@ reload: //后面的for循环，可能被跳出，然后goto reload，重新加�
 
         pmd_perf_start_iteration(s);
 
-        atomic_read_relaxed(&pmd->dp->smc_enable_db, &pmd->ctx.smc_enable_db);
+        atomic_read_relaxed(&pmd->dp->smc_enable_db, &pmd->ctx.smc_enable_db); // 加载 pmd->dp->smc_enable_db 的 值到 pmd->ctx.smc_enable_db
 
-        for (i = 0; i < poll_cnt; i++) {
+        for (i = 0; i < poll_cnt; i++) { // 主循环咯, 一个又一个 rxq 来 polling
 
             if (!poll_list[i].rxq_enabled) {
                 continue;
@@ -6239,7 +6257,7 @@ reload: //后面的for循环，可能被跳出，然后goto reload，重新加�
                 atomic_read_relaxed(&pmd->dp->emc_insert_min,
                                     &pmd->ctx.emc_insert_min);
             } else {
-                pmd->ctx.emc_insert_min = 0;
+                pmd->ctx.emc_insert_min = 0; // 没有 开启 emc 的话, 那么插入的概率就是 0 咯
             }
 
             process_packets =
@@ -7200,6 +7218,15 @@ packet_enqueue_to_flow_map(struct dp_packet *packet,
  * By doing batching SMC lookup, we can use prefetch
  * to hide memory access latency.
  */
+// packets_: 在 emc 里 miss 了 pkts, ref: dfc_processing()
+// keys/missed_keys: 是 packets_ 中对应 pkt 的 key
+// flow_map: 是那些在 dfc_processing() 中命中的报文, 但是为了避免 reorder 不能在快速路径处理的 pkt
+// index_map: 的每个元素对应的是 packets_ 中的元素, 其指向 flow_map 中的元素. 即指示了 packets_ 在 flow_map 中对应的位置
+//
+// 返回的时候
+// - missed_keys 则指示了 smc 里也 miss 的 pkts
+//
+// 所以如果在 smc 中命令了, 可以利用 index_map 将 flow_map 中 对应的元素 填充起来
 static inline void
 smc_lookup_batch(struct dp_netdev_pmd_thread *pmd,
             struct netdev_flow_key *keys,
@@ -7224,7 +7251,7 @@ smc_lookup_batch(struct dp_netdev_pmd_thread *pmd,
     }
 
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, cnt, packet, packets_) {
-        struct dp_netdev_flow *flow = NULL;
+        struct dp_netdev_flow *flow = NULL; // 找到了 flow
         flow_node = smc_entry_get(pmd, keys[i].hash);
         bool hit = false;
         /* Get the original order of this packet in received batch. */
@@ -7235,7 +7262,7 @@ smc_lookup_batch(struct dp_netdev_pmd_thread *pmd,
                 /* Since we dont have per-port megaflow to check the port
                  * number, we need to  verify that the input ports match. */
                 if (OVS_LIKELY(dpcls_rule_matches_key(&flow->cr, &keys[i]) &&
-                flow->flow.in_port.odp_port == packet->md.in_port.odp_port)) {
+                flow->flow.in_port.odp_port == packet->md.in_port.odp_port)) { // 找到了 flow
                     tcp_flags = miniflow_get_tcp_flags(&keys[i].mf);
 
                     /* SMC hit and emc miss, we insert into EMC */
@@ -7299,6 +7326,7 @@ static struct tx_port * pmd_send_port_cache_lookup(
     const struct dp_netdev_pmd_thread *pmd, odp_port_t port_no);
 
 // 硬件支持的 flow marker，有 mark 的时候可以更快的找到报文
+// @port_no: 是入口 port
 inline int
 dp_netdev_hw_flow(const struct dp_netdev_pmd_thread *pmd,
                   odp_port_t port_no OVS_UNUSED,
@@ -7347,10 +7375,33 @@ dp_netdev_hw_flow(const struct dp_netdev_pmd_thread *pmd,
  * will be ignored.
  */
 // 尝试在 hw_offload_flow, per-pmd emc, smc 三级中寻找 flow
+//
 // 最终报文被分成三部分:
-// - batches 组织成 per-flow 的 后续通过快速路径处理的报文
-// - packets_ 开始位置的，flow miss 的，后续需要慢速路径处理的报文
-// - flow_map 中存储的 找到了 flow，但是为了避免 reorder，需要在特殊处理的报文。注意：flow_map 中也包含那些没有找到 flow 的报文
+// - batches: 组织成 per-flow 的 后续通过快速路径处理的报文
+// - packets_: flow miss 的，后续需要慢速路径处理的报文
+// - flow_map: 找到了 flow (emc 或者 smc 里找到的)，但是为了避免 reorder，需要在特殊处理的报文。 注意 packets_ 中的报文也需要消耗掉一个 flow_map 的 entry, 这是为了保序
+//
+//
+// @IN
+//    @pmd: 正在调用这个函数的 pmd
+//    @packets_: 需要处理的一批报文
+//    @port_no: packets_ 这批报文的 入口 port
+//
+// @OUT
+//    @packets_: 在 emc 中 missed 的报文都会通过这个返回
+//    @keys: emc missed 的 key 按照 packets_ 中报文的顺序保存在这里
+//    @missed_keys:  emc / smc 都 missed 的 key 按照 packets_ 中报文的顺序保存在这里, 不过不是直接保存的指针, 而是指向 keys 的二级指针
+//    @batches: 在 packets_ 中前面那些一直 emc hit 的报文按照 flow 分门别类保存在这里
+//    @n_batches: 指示 batches 的大小
+//
+//    @flow_map: 其中的元素有两种:
+//        - 一种是 emc(或 smc) hit 了, 但是没有保存在 batches 中的 pkt 会占据一个 flow_map 的元素, 保存了对应的 pkt 和 flow
+//        - 另一种是 emc / smc 都 miss 了的 pkts, 会按照 packets_ 的报文顺序在 flow_map 中将对应的位置保留下来
+//        - 注: 这个结构主要是为了防止 pkt reorder 了, 保序用的
+//    @n_flows: flow_map 中的元素个数
+//    @index_map: 保存的是指向 flow_map 的 index, 即 flow_map 中哪些位置是为 miss pkt 保留的
+// @return
+//    返回 dfc_processing 中没有命中的报文个数
 static inline size_t
 dfc_processing(struct dp_netdev_pmd_thread *pmd,
                struct dp_packet_batch *packets_,	// 需要慢速路径处理的报文会出现在 packets_ 数组的开头位置
@@ -7378,16 +7429,17 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
                             md_is_valid ? PMD_STAT_RECIRC : PMD_STAT_RECV,
                             cnt);
 
+    // 逐个报文处理
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, cnt, packet, packets_) {
         struct dp_netdev_flow *flow;
 
         if (OVS_UNLIKELY(dp_packet_size(packet) < ETH_HEADER_LEN)) {
-            dp_packet_delete(packet);
+            dp_packet_delete(packet); // 非法报文
             COVERAGE_INC(datapath_drop_rx_invalid_packet);
             continue;
         }
 
-        if (i != cnt - 1) {
+        if (i != cnt - 1) { // 不是最后一个报文, 那么预取下下一个报文以及其 metadata
             struct dp_packet **packets = packets_->packets;
             /* Prefetch next packet data and metadata. */
             OVS_PREFETCH(dp_packet_data(packets[i+1]));
@@ -7399,7 +7451,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
         }
 
         if (netdev_flow_api && recirc_depth == 0) {	// 默认是 disable 的,即没有开启 hw-offload，不会进入这条路径
-            if (OVS_UNLIKELY(dp_netdev_hw_flow(pmd, port_no, packet, &flow))) {
+            if (OVS_UNLIKELY(dp_netdev_hw_flow(pmd, port_no, packet, &flow))) { // 这时候能够走到这里的话, 说明是 硬件里已经 miss 了, 有些硬件会支持将 miss 的 key 返回回来
                 /* Packet restoration failed and it was dropped, do not
                  * continue processing.
                  */
@@ -7423,20 +7475,20 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
-        miniflow_extract(packet, &key->mf);	// 从报文中 packet 提取 miniflow 保存到 key->mf , 并计算 hash
+        miniflow_extract(packet, &key->mf);	// 从报文中 packet 提取 key 信息即 miniflow 保存到 key->mf , 并计算 hash
         key->len = 0; /* Not computed yet. */
         key->hash =
                 (md_is_valid == false)
-                ? dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf)
+                ? dpif_netdev_packet_get_rss_hash_orig_pkt(packet, &key->mf) // 从 miniflow 里将 5-tuple 提取出来计算 hash 咯
                 : dpif_netdev_packet_get_rss_hash(packet, &key->mf);
 
-        /* If EMC is disabled skip emc_lookup */
+        /* If EMC is disabled skip emc_lookup, cur_min == 0 的时候 emc 就是被 disable 了 */
         flow = (cur_min != 0) ? emc_lookup(&cache->emc_cache, key) : NULL;	// 用 key 去 emc(micro_flow) 中查找 flow
-        if (OVS_LIKELY(flow)) { // 找到flow 后
+        if (OVS_LIKELY(flow)) { // emc 命中了
             tcp_flags = miniflow_get_tcp_flags(&key->mf);
             n_emc_hit++;
-            if (OVS_LIKELY(batch_enable)) {	// 将packet 报文保存到 batches 数组中, 一旦出现一个报文 emc miss 后，这里就是 disable 了。后续的报文就算有 flow 也是走慢速路径处理。否则会出现 packet reordering 的
-                dp_netdev_queue_batches(packet, flow, tcp_flags, batches,
+            if (OVS_LIKELY(batch_enable)) {	// 将packet 报文保存到 batches 数组中, 一旦出现一个报文 emc miss 后，这里就是 disable 了。后续的报文就算命中了, 也不会在这里处理的
+                dp_netdev_queue_batches(packet, flow, tcp_flags, batches, // 将 pkt 保存到 flow->batch 里, 然后将 flow->batch 保存到 batches 数组里
                                         n_batches);
             } else {
                 /* Flow batching should be performed only after fast-path
@@ -7446,22 +7498,22 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
                 packet_enqueue_to_flow_map(packet, flow, tcp_flags,	// 将 packet 和 flow 的对应关系保存到 flow_map 中
                                            flow_map, map_cnt++);
             }
-        } else {								// emc 中 也 miss 了, 将 报文移动到 packets_ 数组前面。注意这里直接往前移动，覆盖的。因为前面的报文肯定处理过了。
+        } else {								// emc 中 miss 了, 将 报文移动到 packets_ 数组前面。注意这里直接往前移动，覆盖的。因为前面的报文肯定处理过了。
             /* Exact match cache missed. Group missed packets together at
              * the beginning of the 'packets' array. */
             dp_packet_batch_refill(packets_, packet, i);
 
             /* Preserve the order of packet for flow batching. */
             index_map[n_missed] = map_cnt;
-            flow_map[map_cnt++].flow = NULL;
+            flow_map[map_cnt++].flow = NULL;	// 为了让 flow_map 能够体现 packets_ 中的原始报文的顺序, 所以这里也要消耗 flow_map 一个 entry
 
             /* 'key[n_missed]' contains the key of the current packet and it
              * will be passed to SMC lookup. The next key should be extracted
              * to 'keys[n_missed + 1]'.
              * We also maintain a pointer array to keys missed both SMC and EMC
              * which will be returned to the caller for future processing. */
-            missed_keys[n_missed] = key;
-            key = &keys[++n_missed];
+            missed_keys[n_missed] = key; // emc 和 smc 都 missed 的 key 会用 missed_keys 指示
+            key = &keys[++n_missed]; // emc missed 的 key 保存在 keys 里
 
             /* Skip batching for subsequent packets to avoid reordering. */
             batch_enable = false;	// 一旦有一个 报文 miss 了 emc 后，batch_enable 就是 false了
@@ -7480,6 +7532,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     }
 
     /* Packets miss EMC will do a batch lookup in SMC if enabled */
+    // 去 smc 里尝试查找一次, 找到了就将 flow_map 中对应位置填充起来
     smc_lookup_batch(pmd, keys, missed_keys, packets_,
                      n_missed, flow_map, index_map);
 
@@ -7568,11 +7621,17 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
 }
 
 // 处理那些 emc miss 的报文
-// - 为什么叫 fast_path，因为在 ovs-kernel 中megaflow 实现在 kernel的，是快速路径
+// - 为什么叫 fast_path，因为在 ovs-kernel 中megaflow 在 kernel 实现的，是快速路径
 // - 在ovs-kernel 场景，megaflow 处理失败，就需要通过 netlink upcall 给用户态处理。在 ovs-dpdk 场景不需要，直接在 里面调用 handle_upcall 继续处理就是了
 //
 // megaflow 中命中的报文，加入 flow_map 中
 // 未命中的报文，upcall 后，找 openflow 来处理
+//
+// @packets_: 在 emc 和 smc 中都 miss 的报文
+// @keys: packets_ 中这些没有命中的报文的 key 的 二级指针
+// @flow_map: ref: dfc_processing 注释
+// @index_map: ref: dfc_processing
+// @in_port: 这些报文的 入口 port
 static inline void
 fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                      struct dp_packet_batch *packets_,
@@ -7601,7 +7660,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         keys[i]->len = netdev_flow_key_size(miniflow_n_values(&keys[i]->mf));	// 从 miniflow 中提取信息
     }
     /* Get the classifier for the in_port */
-    cls = dp_netdev_pmd_lookup_dpcls(pmd, in_port);	// 拿到 megaflow
+    cls = dp_netdev_pmd_lookup_dpcls(pmd, in_port);	// 拿到 megaflow 表
     if (OVS_LIKELY(cls)) {
         any_miss = !dpcls_lookup(cls, (const struct netdev_flow_key **)keys, // keys 是那些 emc miss 的报文中提取出来的key, 是否存在某些key 在 dpcls 中miss了
                                 rules, cnt, &lookup_cnt);
@@ -7694,6 +7753,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
  *
  * When 'md_is_valid' is true the metadata in 'packets' are already valid.
  * When false the metadata in 'packets' need to be initialized. */
+// port_no 是入口 port
 static void
 dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
                   struct dp_packet_batch *packets,
@@ -7710,21 +7770,22 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     struct netdev_flow_key *missed_keys[PKT_ARRAY_SIZE];
     struct packet_batch_per_flow batches[PKT_ARRAY_SIZE];
     size_t n_batches;
-    struct dp_packet_flow_map flow_map[PKT_ARRAY_SIZE];
+    struct dp_packet_flow_map flow_map[PKT_ARRAY_SIZE]; // 一个为了保序的结构
     uint8_t index_map[PKT_ARRAY_SIZE];
     size_t n_flows, i;
 
     odp_port_t in_port;
 
     n_batches = 0;
+    // 走 dfc (datapath flow cache) 先处理下下, 即 emc
     dfc_processing(pmd, packets, keys, missed_keys, batches, &n_batches,
                    flow_map, &n_flows, index_map, md_is_valid, port_no);
 
-    if (!dp_packet_batch_is_empty(packets)) {	// packets 中还剩了报文需要处理, 处理那些 emc miss 的报文。去 dpcls 即 megaflow 中找了
+    if (!dp_packet_batch_is_empty(packets)) {	// packets 中还剩了报文需要处理, 处理那些 emc(且 smc) miss 的报文。去 dpcls 即 megaflow 中找了
         /* Get ingress port from first packet's metadata. */
         in_port = packets->packets[0]->md.in_port.odp_port;	// 这一批报文是从同一个 port 中取出的
         fast_path_processing(pmd, packets, missed_keys,
-                             flow_map, index_map, in_port);
+                             flow_map, index_map, in_port); // 处理后, 还是按照顺序保存在 flow_map 里
     }
 
     /* Batch rest of packets which are in flow map. */
@@ -7735,6 +7796,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
         if (OVS_UNLIKELY(!map->flow)) {
             continue;
         }
+	// 将 flow_map 里的报文按照 flow 分门别类的 batch 起来
         dp_netdev_queue_batches(map->packet, map->flow, map->tcp_flags,	// flow_map 中那些 flow 不为空的报文的处理, 最终也是加入到batches 中
                                 batches, &n_batches);
      }
@@ -7752,6 +7814,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
         batches[i].flow->batch = NULL;
     }
 
+    // 报文都找到了 flow 了, 而且按照 flow batch 好了, 执行 action 吧
     for (i = 0; i < n_batches; i++) {	// emc 还有 megaflow 中命中的报文都会在这里处理。miss 的报文都走upcall 路径去找 openflow 处理了
         packet_batch_per_flow_execute(&batches[i], pmd);
     }
@@ -7762,14 +7825,16 @@ dp_netdev_input(struct dp_netdev_pmd_thread *pmd,
                 struct dp_packet_batch *packets,
                 odp_port_t port_no)
 {
+// 第一次进入 dp_netdev_intpu__ 的时候 md_is_valid 肯定是 false 咯
     dp_netdev_input__(pmd, packets, false, port_no);
-    return 0;
+    return 0; // 这个函数肯定返回 0 的, 也就是说 packets 里的 pkt 肯定都能处理掉, 实在无法处理的 (比如: 关闭了 upcall), 那么就 drop 掉
 }
 
 static void
 dp_netdev_recirculate(struct dp_netdev_pmd_thread *pmd,
                       struct dp_packet_batch *packets)
 {
+// 不是第一次进来了, metadata 已经被初始化过了, 所以是 true 了
     dp_netdev_input__(pmd, packets, true, 0);
 }
 
@@ -9245,6 +9310,12 @@ dpcls_rule_matches_key(const struct dpcls_rule *rule,
  * priorities, instead returning any rule which matches the flow.
  *
  * Returns true if all miniflows found a corresponding rule. */
+// @IN
+//     cls: megaflow 表
+//     keys: 要来找 megaflow 的报文 key
+//     cnt: 指示 keys 数组的大小
+// @OUT
+//    rules: 找到的 megaflow
 bool
 dpcls_lookup(struct dpcls *cls, const struct netdev_flow_key *keys[],
              struct dpcls_rule **rules, const size_t cnt,

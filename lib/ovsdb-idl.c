@@ -83,6 +83,7 @@ struct ovsdb_idl_arc {
     struct ovsdb_idl_row *dst;  /* Destination row. */
 };
 
+// 代表一个数据库
 struct ovsdb_idl {
     struct ovsdb_cs *cs;
     const struct ovsdb_idl_class *class_;
@@ -468,7 +469,7 @@ ovsdb_idl_wait(struct ovsdb_idl *idl)
 
 /* Returns a "sequence number" that represents the state of 'idl'.  When
  * ovsdb_idl_run() changes the database, the sequence number changes.  The
- * initial fetch of the entire contents of the remote database is considered to
+ * initial fetch of the entire contents of the remote database is considered to // 第一次获取 remote database 是被看作 change 的
  * be one kind of change.  Successfully acquiring a lock, if one has been
  * configured with ovsdb_idl_set_lock(), is also considered to be a change.
  *

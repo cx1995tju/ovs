@@ -82,8 +82,9 @@ struct dp_netdev_flow_attrs {
  * Some members, marked 'const', are immutable.  Accessing other members
  * requires synchronization, as noted in more detail below.
  */
+// 将报文提交给 openflow 层处理后, 利用得到的信息来构造这个结构, handle_packet_upcall()
 struct dp_netdev_flow {
-    const struct flow flow;      /* Unmasked flow that created this entry. */
+    const struct flow flow;      /* Unmasked flow that created this entry. */ // flow key, 保存到dp_netdev_pmd_thread.flow_table
     /* Hash table index by unmasked flow. */
     const struct cmap_node node; /* In owning dp_netdev_pmd_thread's */
                                  /* 'flow_table'. */
@@ -117,11 +118,11 @@ struct dp_netdev_flow {
      * member to store a pointer to the output batch for the flow.  It is
      * reset after the batch has been sent out (See dp_netdev_queue_batches(),
      * packet_batch_per_flow_init() and packet_batch_per_flow_execute()). */
-    struct packet_batch_per_flow *batch;
+    struct packet_batch_per_flow *batch; // 处理报文的时候临时使用的, 即一次处理中, 相同 flow 的 pkt 都会缓存到这里
 
     /* Packet classification. */
     char *dp_extra_info;         /* String to return in a flow dump/get. */
-    struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */	// megaflow
+    struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */	// megaflow, 创建 dp_netdev_flow 的时候是基于 openflow 的信息的, 那么当然可以有一个 mask 信息咯, 保存到: dp_netdev_pmd_thread.classifiers 里
     /* 'cr' must be the last member. */
 };
 

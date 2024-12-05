@@ -331,6 +331,7 @@ static bool flow_restore_wait = true;
  * provider will make copies of anything required.  An ofproto provider
  * will remove any existing state that is not described by the hint, and
  * may choose to remove it all. */
+// iface_hints hash 表, 保存了数据库里所有的 interface
 void
 ofproto_init(const struct shash *iface_hints)
 {
@@ -349,7 +350,7 @@ ofproto_init(const struct shash *iface_hints)
         new_hint->br_type = xstrdup(br_type);
         new_hint->ofp_port = orig_hint->ofp_port;
 
-        shash_add(&init_ofp_ports, node->name, new_hint);
+        shash_add(&init_ofp_ports, node->name, new_hint); // 将所有的 port 都 copy 后保存到一个新的 hash 表里 init_ofp_ports
     }
 
     for (i = 0; i < n_ofproto_classes; i++) { //对注册ofproto_classes 调用init函数  即ofproto_dpif_class init函数
@@ -362,6 +363,7 @@ ofproto_init(const struct shash *iface_hints)
 /* 'type' should be a normalized datapath type, as returned by
  * ofproto_normalize_type().  Returns the corresponding ofproto_class
  * structure, or a null pointer if there is none registered for 'type'. */
+// type 是 dpif_class 的 type
 static const struct ofproto_class *
 ofproto_class_find__(const char *type)
 {
@@ -1787,13 +1789,14 @@ ofproto_type_wait(const char *datapath_type)
     }
 }
 
+// 给每个 openflow switch 都 run 一下
 int
 ofproto_run(struct ofproto *p)
 {
     int error;
     uint64_t new_seq;
 
-    error = p->ofproto_class->run(p);
+    error = p->ofproto_class->run(p); // ofproto_dpif_class
     if (error && error != EAGAIN) {
         VLOG_ERR_RL(&rl, "%s: run failed (%s)", p->name, ovs_strerror(error));
     }
@@ -1877,7 +1880,7 @@ ofproto_run(struct ofproto *p)
         p->change_seq = new_seq;
     }
 
-    connmgr_run(p->connmgr, handle_openflow); //处理controller snoop等连接
+    connmgr_run(p->connmgr, handle_openflow); //处理 openflow controller snoop等连接
 
     return error;
 }

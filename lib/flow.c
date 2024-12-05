@@ -265,6 +265,9 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 }
 
 /* Data at 'valuep' may be unaligned. */
+// 将 valuep 指向 内存位置的 N_WORDS 个 U64, push 到 miniflow 里
+// 当然对应的 flowmap 也要设置的
+// MF 是 struct mf_ctx
 #define miniflow_push_words_(MF, OFS, VALUEP, N_WORDS)          \
 {                                                               \
     MINIFLOW_ASSERT((OFS) % 8 == 0);                            \
@@ -757,6 +760,7 @@ dump_invalid_packet(struct dp_packet *packet, const char *reason)
  *      present and the packet has at least the content used for the fields
  *      of interest for the flow, otherwise UINT16_MAX.
  */
+// 利用 packet 和 packet->md 中的信息来填充 dst
 void
 miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 {
@@ -779,14 +783,14 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     /* Metadata. */
     if (flow_tnl_dst_is_set(&md->tunnel)) {
         miniflow_push_words(mf, tunnel, &md->tunnel,
-                            offsetof(struct flow_tnl, metadata) /
+                            offsetof(struct flow_tnl, metadata) /	/*  tunnel metadata 前面的部分 push 进去 */
                             sizeof(uint64_t));
 
         if (!(md->tunnel.flags & FLOW_TNL_F_UDPIF)) {
             if (md->tunnel.metadata.present.map) {
                 miniflow_push_words(mf, tunnel.metadata, &md->tunnel.metadata,
                                     sizeof md->tunnel.metadata /
-                                    sizeof(uint64_t));
+                                    sizeof(uint64_t)); // tunnel.metadata push 到 miniflow 里
             }
         } else {
             if (md->tunnel.metadata.present.len) {

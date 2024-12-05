@@ -240,7 +240,7 @@ dp_enumerate_types(struct sset *types)
     dp_initialize();
 
     ovs_mutex_lock(&dpif_mutex);
-    SHASH_FOR_EACH(node, &dpif_classes) { //获取所有dpif_class的type，目前只有两个 system netdev
+    SHASH_FOR_EACH(node, &dpif_classes) { //获取所有dpif_class的type，目前只有两个 dpif_netlink_class dpif_netdev_class
         const struct registered_dpif_class *registered_class = node->data;
         sset_add(types, registered_class->dpif_class->type);
     }

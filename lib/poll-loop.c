@@ -318,7 +318,7 @@ free_poll_nodes(struct poll_loop *loop)
 void
 poll_block(void)	// Per-thread 的，只响应自己的线程注册的事件。 而且一旦被唤醒后，前面注册的所有事件都会被取消。不管有没有发生
 {
-    struct poll_loop *loop = poll_loop();
+    struct poll_loop *loop = poll_loop(); // 得到了一个 per-thread 结构
     struct poll_node *node;
     struct pollfd *pollfds;
     HANDLE *wevents = NULL;

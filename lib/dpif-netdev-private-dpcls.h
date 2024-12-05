@@ -36,15 +36,18 @@ struct dpcls_rule;
 struct dpcls;
 
 /* Must be public as it is instantiated in subtable struct below. */
-// miniflow
+// microflow 的 key
 struct netdev_flow_key {
     uint32_t hash;       /* Hash function differs for different users. */
     uint32_t len;        /* Length of the following miniflow (incl. map). */
-    struct miniflow mf;	// 节省 flow 的空间
+    struct miniflow mf;	// 节省 flow 的空间, 是 struct flow 的压缩
     uint64_t buf[FLOW_MAX_PACKET_U64S];
 };
 
 /* A rule to be inserted to the classifier. */
+// - 表示的是一个 masked key, 即 subtable 中一个 entry 的 key
+// - 一个 subtable 中所有的 key mask 都是一样的
+// - 可以认为其是一条 megaflow
 struct dpcls_rule {
     struct cmap_node cmap_node;   /* Within struct dpcls_subtable 'rules'. */
     struct netdev_flow_key *mask; /* Subtable's mask. */
@@ -65,6 +68,7 @@ uint32_t (*dpcls_subtable_lookup_func)(struct dpcls_subtable *subtable,
                                        struct dpcls_rule **rules);
 
 /* A set of rules that all have the same fields wildcarded. */
+// 组织 dpcls_rule 的表, 即具有相同 mask 的 megaflow 组织在一起
 struct dpcls_subtable {
     /* The fields are only used by writers. */
     struct cmap_node cmap_node OVS_GUARDED; /* Within dpcls 'subtables_map'. */

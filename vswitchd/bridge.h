@@ -20,9 +20,12 @@
 
 struct simap;
 
+// 模块初始化
 void bridge_init(const char *remote);
+// 模块退出
 void bridge_exit(bool delete_datapath);
 
+// 模块 main 函数
 void bridge_run(void);
 void bridge_wait(void);
 

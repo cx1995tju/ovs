@@ -70,10 +70,11 @@ struct smap;
 
 extern struct ovs_mutex ofproto_mutex;
 
-/* An OpenFlow switch. 代表一个openflow switch，其更上一层结构是struct bridge
+/* An OpenFlow switch. 代表一个openflow switch，其更上一层结构是struct bridge, bridge 表示交换机, 交换机原则上可以不是 openflow switch 的
  *
  * With few exceptions, ofproto implementations may look at these fields but
  * should not modify them. */
+// 表示一个 openflow 交换机
 struct ofproto {
     struct hmap_node hmap_node; /* In global 'all_ofprotos' hmap. */
     const struct ofproto_class *ofproto_class;
@@ -751,6 +752,7 @@ struct ofproto_class { //目前ovs只实现了唯一的一个ofproto_dpif_class
      * caller has already initialized 'types'.  The implementation should add
      * its own types to 'types' but not remove any existing ones, because other
      * ofproto classes might already have added names to it. */
+    // 这个 ofproto_class 支持的所有 ofproto(openflow 交换机) 类型
     void (*enumerate_types)(struct sset *types);	// 不要从 types 中删除, ofproto type
 
     /* Enumerates the names of all existing datapath of the specified 'type'
