@@ -48,9 +48,11 @@ struct netdev_flow_key {
 // - 表示的是一个 masked key, 即 subtable 中一个 entry 的 key
 // - 一个 subtable 中所有的 key mask 都是一样的
 // - 可以认为其是一条 megaflow
+//
+// // 插入: dpcls_insert()
 struct dpcls_rule {
     struct cmap_node cmap_node;   /* Within struct dpcls_subtable 'rules'. */
-    struct netdev_flow_key *mask; /* Subtable's mask. */
+    struct netdev_flow_key *mask; /* Subtable's mask. */ // 因为相同 mask 的 flow组织在同一个 subtable 里(dpcls_subtable), 所以 mask 是一个 per-subtable 的值, 通过指针指过去就好了
     struct netdev_flow_key flow;  /* Matching key. */
     /* 'flow' must be the last field, additional space is allocated here. */
 };
@@ -68,7 +70,7 @@ uint32_t (*dpcls_subtable_lookup_func)(struct dpcls_subtable *subtable,
                                        struct dpcls_rule **rules);
 
 /* A set of rules that all have the same fields wildcarded. */
-// 组织 dpcls_rule 的表, 即具有相同 mask 的 megaflow 组织在一起
+// 组织 megaflow(i.e. dpcls_rule) 的表, 即具有相同 mask 的 megaflow 组织在一起
 struct dpcls_subtable {
     /* The fields are only used by writers. */
     struct cmap_node cmap_node OVS_GUARDED; /* Within dpcls 'subtables_map'. */

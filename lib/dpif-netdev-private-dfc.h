@@ -64,7 +64,7 @@ extern "C" {
  */
 
 #define EM_FLOW_HASH_SHIFT 13
-#define EM_FLOW_HASH_ENTRIES (1u << EM_FLOW_HASH_SHIFT)
+#define EM_FLOW_HASH_ENTRIES (1u << EM_FLOW_HASH_SHIFT) // 8K
 #define EM_FLOW_HASH_MASK (EM_FLOW_HASH_ENTRIES - 1)
 #define EM_FLOW_HASH_SEGS 2
 
@@ -73,7 +73,7 @@ extern "C" {
  * as for the EMC design. */
 #define SMC_ENTRY_PER_BUCKET 4
 #define SMC_ENTRIES (1u << 20)
-#define SMC_BUCKET_CNT (SMC_ENTRIES / SMC_ENTRY_PER_BUCKET)
+#define SMC_BUCKET_CNT (SMC_ENTRIES / SMC_ENTRY_PER_BUCKET) // 1M / 4 = 256K
 #define SMC_MASK (SMC_BUCKET_CNT - 1)
 
 /* Default EMC insert probability is 1 / DEFAULT_EM_FLOW_INSERT_INV_PROB */
@@ -94,24 +94,30 @@ struct emc_entry {
     struct netdev_flow_key key;   /* key.hash used for emc hash value. */
 };
 
+// emc flow 表
 struct emc_cache {
     struct emc_entry entries[EM_FLOW_HASH_ENTRIES];
     int sweep_idx;                /* For emc_cache_slow_sweep(). */
 };
 
+// 一个 bucket 存储哪些 netdev_flow_key.hash % SMC_BUCKET_CNT 相同的 flow
+// 在 bucket 里的 SMC_ENTRY_PER_BUCKET 个 flow sig 都是不同的
 struct smc_bucket {
     uint16_t sig[SMC_ENTRY_PER_BUCKET];
     uint16_t flow_idx[SMC_ENTRY_PER_BUCKET];
 };
 
 /* Signature match cache, differentiate from EMC cache */
+// - 注意: smc 并不能算作一层 flow, 而仅仅是为了优化 megaflow 的查找做的一层 megaflow 的 cache 层
+// 根据 netdev_flow_key.hash % SMC_BUCKET_CNT 作为 index 找到对应的 bucket, ref: smc_insert
+// 然后将 flow 的 hash 的 [31:16]b 作为 sig 将其在 dp_netdev_pmd_thread.flow_table 中的位置保存到 flow_idx 中
 struct smc_cache {
-    struct smc_bucket buckets[SMC_BUCKET_CNT];
+    struct smc_bucket buckets[SMC_BUCKET_CNT]; // 256K 大小 ???
 };
 
 struct dfc_cache {
     struct emc_cache emc_cache;
-    // emc 和 megaflow 之间的一层 subtable match cache
+    // emc 和 megaflow 之间的一层 基于签名而不是 flow key 匹配的表
     struct smc_cache smc_cache;
 };
 

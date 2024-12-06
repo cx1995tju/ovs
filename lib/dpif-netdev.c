@@ -164,9 +164,10 @@ static struct odp_support dp_netdev_support = {
 /* Time in microseconds to try RCU quiescing. */
 #define PMD_RCU_QUIESCE_INTERVAL 10000LL
 
-// 组织 dpcls_subtable 的
-// 是一个 per in-port 的结构, 保存的是 megaflow
+// megaflow 表, 按照 dpcls_subtable 作为基本单位组织的
 // 其中的 megaflow 按照 mask 被组织成各种 subtable, 即 mask 相同的 megaflow 被组织在同一个 subtable 里
+//
+// 是一个 per in-port 的结构, ref: dp_netdev_pmd_thread.classifiers
 //
 // 其中保存的 megaflow 是 non-overlapping 的, refe: dpcls_lookup
 struct dpcls {
@@ -3145,7 +3146,7 @@ smc_insert(struct dp_netdev_pmd_thread *pmd,
            uint32_t hash)
 {
     struct smc_cache *smc_cache = &(pmd->flow_cache).smc_cache;
-    struct smc_bucket *bucket = &smc_cache->buckets[key->hash & SMC_MASK];
+    struct smc_bucket *bucket = &smc_cache->buckets[key->hash & SMC_MASK]; // 基于 hash 找到一个 bucket
     uint16_t index;
     uint32_t cmap_index;
     int i;
@@ -3155,8 +3156,7 @@ smc_insert(struct dp_netdev_pmd_thread *pmd,
     }
 
     cmap_index = cmap_find_index(&pmd->flow_table, hash);
-    index = (cmap_index >= UINT16_MAX) ? UINT16_MAX : (uint16_t)cmap_index;
-
+    index = (cmap_index >= UINT16_MAX) ? UINT16_MAX : (uint16_t)cmap_index; // why ???, 因为 smc 的 index 是 u16 么? 是为了性能么, 所以不能扩充 ?
     /* If the index is larger than SMC can handle (uint16_t), we don't
      * insert */
     if (index == UINT16_MAX) {
@@ -3641,13 +3641,33 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
     *CONST_CAST(struct flow *, &flow->flow) = match->flow;
     *CONST_CAST(ovs_u128 *, &flow->ufid) = *ufid;
     ovs_refcount_init(&flow->ref_cnt);
+    // 从 openflow 的 actions 提取出 action 填充到 flow 里
     ovsrcu_set(&flow->actions, dp_netdev_actions_create(actions, actions_len));
 
-    dp_netdev_get_mega_ufid(match, CONST_CAST(ovs_u128 *, &flow->mega_ufid));
+    dp_netdev_get_mega_ufid(match, CONST_CAST(ovs_u128 *, &flow->mega_ufid)); // 如何确保 unique 呢 ?
     netdev_flow_key_init_masked(&flow->cr.flow, &match->flow, &mask);
 
     /* Select dpcls for in_port. Relies on in_port to be exact match. */
     cls = dp_netdev_pmd_find_dpcls(pmd, in_port);
+    /* 考虑 openflow 是:
+     * - key:  1000
+     * - mask: 1000 
+     *
+     * 对于 两个 flow key: 1111 / 1110 是否会生成下述两个 megaflow
+     *
+     * 如果有这样两条 flow key 是:
+     * - flow 1:
+     *   - key:  1111
+     *   - mask: 1000
+     *
+     * - flow 2
+     *   - key:  1110
+     *   - mask: 1000
+     *
+     *  这样两个 megaflow 不就 overlapping 了么?
+     *
+     * 不可能出现这样的情况的, 当 flow 1 插入到 megaflow 里之后, flow 2 就不会被创建的, 因为到不了 openflow 层的, 会直接在 megaflow 里命中 flow 1 的
+     * */
     dpcls_insert(cls, &flow->cr, &mask);
 
     ds_put_cstr(&extra_info, "miniflow_bits(");
@@ -7246,29 +7266,33 @@ smc_lookup_batch(struct dp_netdev_pmd_thread *pmd,
     uint16_t tcp_flags;
 
     /* Prefetch buckets for all packets */
+    // 如果 packets_ 在 smc_cache 中, 那么其所在的 bucket 就是 packet 的 keys[i].hash 指示的
+    // 所以这里把这些 smc_bucket 都预取出来
     for (i = 0; i < cnt; i++) {
         OVS_PREFETCH(&smc_cache->buckets[keys[i].hash & SMC_MASK]);
     }
 
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, cnt, packet, packets_) {
-        struct dp_netdev_flow *flow = NULL; // 找到了 flow
-        flow_node = smc_entry_get(pmd, keys[i].hash);
+        struct dp_netdev_flow *flow = NULL;
+        flow_node = smc_entry_get(pmd, keys[i].hash); // 利用 hash 值去 smc 里搞一个 flow 出来
         bool hit = false;
         /* Get the original order of this packet in received batch. */
         recv_idx = index_map[i];
 
         if (OVS_LIKELY(flow_node != NULL)) {
-            CMAP_NODE_FOR_EACH (flow, node, flow_node) {
+            CMAP_NODE_FOR_EACH (flow, node, flow_node) { // 具有相同 hash 值的 flow 都在这个 flow_node 上
                 /* Since we dont have per-port megaflow to check the port
                  * number, we need to  verify that the input ports match. */
-                if (OVS_LIKELY(dpcls_rule_matches_key(&flow->cr, &keys[i]) &&
+		    // 因为 smc 并不是一层 flow, 而仅仅是一个 megaflow 的 cache 层, 用来优化 megaflow 的查找的, 所以要和 megaflow 匹配校验下. 
+		    // 因为是 cache 层, 可能是冲突的, 所以要比较下. 考虑下: 组相连 cache 的特性
+                if (OVS_LIKELY(dpcls_rule_matches_key(&flow->cr, &keys[i]) &&	// 这个 key 和 flow->cr 这个 megaflow 可以匹配上
                 flow->flow.in_port.odp_port == packet->md.in_port.odp_port)) { // 找到了 flow
                     tcp_flags = miniflow_get_tcp_flags(&keys[i].mf);
 
                     /* SMC hit and emc miss, we insert into EMC */
                     keys[i].len =
                         netdev_flow_key_size(miniflow_n_values(&keys[i].mf));
-                    emc_probabilistic_insert(pmd, &keys[i], flow);
+                    emc_probabilistic_insert(pmd, &keys[i], flow);	// XXX: 这里很关键哟,  插入 emc 时使用的 keys[i] 是从 pkt 里提取出来的, 而不是 flow.flow 中的 key; flow 中的 key 是在 openflow 处理后得到的.
                     /* Add these packets into the flow map in the same order
                      * as received.
                      */
@@ -7556,7 +7580,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
 
     match.tun_md.valid = false;
     miniflow_expand(&key->mf, &match.flow);	// miniflow 扩充为 openflow 的可以了
-    memset(&match.wc, 0, sizeof match.wc);
+    memset(&match.wc, 0, sizeof match.wc); // match 的填充来自于 openflow
 
     ofpbuf_clear(actions);
     ofpbuf_clear(put_actions);
@@ -7730,7 +7754,8 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         uint32_t hash =  dp_netdev_flow_hash(&flow->ufid);
         smc_insert(pmd, keys[i], hash);
 
-        emc_probabilistic_insert(pmd, keys[i], flow);	// refer to emc-insert-inv-prob	 http://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html
+	// refer to emc-insert-inv-prob	 http://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html
+        emc_probabilistic_insert(pmd, keys[i], flow);
         /* Add these packets into the flow map in the same order
          * as received.
          */
@@ -9344,10 +9369,10 @@ dpcls_lookup(struct dpcls *cls, const struct netdev_flow_key *keys[],
      * fields as defined by the subtable's mask.  We proceed to process every
      * search-key against each subtable, but when a match is found for a
      * search-key, the search for that key can stop because the rules are
-     * non-overlapping. */
+     * non-overlapping. */		// 重要, non-overlapping
     PVECTOR_FOR_EACH (subtable, &cls->subtables) {
         /* Call the subtable specific lookup function. */
-        found_map = subtable->lookup_func(subtable, keys_map, keys, rules);
+        found_map = subtable->lookup_func(subtable, keys_map, keys, rules); // %lookup_generic_impl()
 
         /* Count the number of subtables searched for this packet match. This
          * estimates the "spread" of subtables looked at per matched packet. */

@@ -99,11 +99,12 @@ struct dp_netdev_pmd_thread {
      * 'flow_mutex'.
      */
     struct ovs_mutex flow_mutex;
+    // concurrent hash map
     struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd, 保存的是 dp_netdev_flow 结构
 
     /* One classifier per in_port polled by the pmd */
     // 每个 in_port 有一个 megaflow 的表
-    struct cmap classifiers;	// per-in_port  struct dpcls 结构挂在这里
+    struct cmap classifiers;	// per-in_port  struct dpcls 结构挂在这里, 而且会保证不会这里的 megaflow  overlapping, ref: comments on dpcls_lookup()
     /* Periodically sort subtable vectors according to hit frequencies */
     long long int next_optimization;
     /* End of the next time interval for which processing cycles

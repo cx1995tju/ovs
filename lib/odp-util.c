@@ -6600,6 +6600,9 @@ odp_key_to_dp_packet(const struct nlattr *key, size_t key_len,
 
 /* Places the hash of the 'key_len' bytes starting at 'key' into '*hash'.
  * Generated value has format of random UUID. */
+// 将 key 开始的 key_len 长度的东西计算出一个 hash 值, 将其赋值给 hash
+//
+// 128b 的 uuid
 void
 odp_flow_key_hash(const void *key, size_t key_len, ovs_u128 *hash)
 {

@@ -83,14 +83,21 @@ struct dp_netdev_flow_attrs {
  * requires synchronization, as noted in more detail below.
  */
 // 将报文提交给 openflow 层处理后, 利用得到的信息来构造这个结构, handle_packet_upcall()
+// 创建: dp_netdev_flow_add()
+/* Q:  一个 dp_netdev_flow 即通过 flow 表达了精确的 key, 又通过 cr 表示一个 megaflow, 那么 megaflow 不会 overlapping 么 ?
+ * dp_netdev_flow 是一个 数据面使用的 flow, 但是其并不是 __一个精确的 flow__ , 虽然其开头有一个 const struct flow flow 结构, 但是这个结构里的 key 其实不太重要, 重要的是其中的 actions
+ *
+ * - emc 插入的时候, key 不是使用的这里的 flow 里的 key, 而是 从 pkt 里提取出来的key, 但是 value 会指向这个 dp_netdev_flow, 主要是为了其中的 actions 咯
+ * */
 struct dp_netdev_flow {
+    // miss 的时候将 pkt upcall 到 openflow 层, 这时候匹配的到 openflow 是通配的, 后续创建的 megaflow 也是通配的
     const struct flow flow;      /* Unmasked flow that created this entry. */ // flow key, 保存到dp_netdev_pmd_thread.flow_table
     /* Hash table index by unmasked flow. */
     const struct cmap_node node; /* In owning dp_netdev_pmd_thread's */
                                  /* 'flow_table'. */
     const struct cmap_node mark_node; /* In owning flow_mark's mark_to_flow */
-    const ovs_u128 ufid;         /* Unique flow identifier. */
-    const ovs_u128 mega_ufid;    /* Unique mega flow identifier. */
+    const ovs_u128 ufid;         /* Unique flow identifier. */ // 和 mega_ufid 类似, 算出的 一个 uuid 
+    const ovs_u128 mega_ufid;    /* Unique mega flow identifier. */ // 其实没有办法 100% 确保, 不过是使用足够大的 uuid 罢了 ref: %dp_netdev_get_mega_ufid()
     const unsigned pmd_id;       /* The 'core_id' of pmd thread owning this */
                                  /* flow. */
 
@@ -122,6 +129,7 @@ struct dp_netdev_flow {
 
     /* Packet classification. */
     char *dp_extra_info;         /* String to return in a flow dump/get. */
+    // 不同的
     struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */	// megaflow, 创建 dp_netdev_flow 的时候是基于 openflow 的信息的, 那么当然可以有一个 mask 信息咯, 保存到: dp_netdev_pmd_thread.classifiers 里
     /* 'cr' must be the last member. */
 };
