@@ -155,6 +155,7 @@ struct xbundle {
     bool protected;                /* Protected port mode */
 };
 
+// tarnslate 层使用的结构
 struct xport {
     struct hmap_node hmap_node;      /* Node in global 'xports' map. */
     struct ofport_dpif *ofport;      /* Key in global 'xports map. */
@@ -1497,6 +1498,13 @@ xlate_ofport_remove(struct ofport_dpif *ofport)
     xlate_xport_remove(new_xcfg, xport);
 }
 
+/* IN
+ *    @backer
+ *    @flow
+ * OUT:
+ *    @ofp_in_port
+ *    @xportp
+ * */
 static struct ofproto_dpif *
 xlate_lookup_ofproto_(const struct dpif_backer *backer,
                       const struct flow *flow,
@@ -1593,6 +1601,16 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
  *
  * Returns 0 if successful, ENODEV if the parsed flow has no associated ofproto.
  */
+/* IN
+ *    @backer
+ *    @flow
+ * OUT:
+ *    @ofprotop
+ *    @ipfix
+ *    @sflow
+ *    @netflow
+ *    @ofp_in_port
+ * */
 int
 xlate_lookup(const struct dpif_backer *backer, const struct flow *flow,
              struct ofproto_dpif **ofprotop, struct dpif_ipfix **ipfix,
@@ -3412,6 +3430,7 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
     }
 }
 
+// 路由查找结果 out_port 是与 bridge 同名的 local port
 static int
 tnl_route_lookup_flow(const struct xlate_ctx *ctx,
                       const struct flow *oflow,
@@ -3424,6 +3443,7 @@ tnl_route_lookup_flow(const struct xlate_ctx *ctx,
     struct in6_addr dst;
 
     dst = flow_tnl_dst(&oflow->tunnel);
+    // 这个 out_dev 是查询到的出口 bridge, 注意每个 bridge 都有一个 local port 和 bridge 同名的
     if (!ovs_router_lookup(oflow->pkt_mark, &dst, out_dev, src, &gw)) {
         return -ENOENT;
     }
@@ -3595,6 +3615,13 @@ propagate_tunnel_data_to_flow(struct xlate_ctx *ctx, struct eth_addr dmac,
                                     is_tnl_ipv6, nw_proto);
 }
 
+// openflow 层面 output 到 vxlan 等 tunnel port 的 action, 在这里被解构为了下述几部分:
+// - 查找 路由表, arp 表等信息, 找到 output port, 将其作为参数保存到 datapath 的 flow action 中
+// - 使用了下述几个 datapath 的 action 
+//	- OVS_ACTION_ATTR_CLONE
+//	- OVS_ACTION_ATTR_TUNNEL_PUSH
+// - 然后会 `patch_port_output()` 里将 pkt 穿越到另一个 bridge (查路由得到的), 继续去获取 OUPUT action
+//
 static int
 native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
                      const struct flow *flow, odp_port_t tunnel_odp_port,
@@ -3728,7 +3755,7 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
         entry->tunnel_hdr.hdr_size = tnl_push_data.header_len;
         entry->tunnel_hdr.operation = ADD;
 
-        patch_port_output(ctx, xport, out_dev);
+        patch_port_output(ctx, xport, out_dev); // XXX: HERE, 这里 的 out_dev 是类似 vxlan port 的 tunnel port, 所以也会直接联通另一个 bridge
 
         /* Similar to the stats update in revalidation, the x_cache entries
          * are populated by the previous translation are used to update the
@@ -3820,6 +3847,12 @@ xlate_flow_is_protected(const struct xlate_ctx *ctx, const struct flow *flow, co
  * the clone action, so that any modification to the packet will not be visible
  * to the remaining actions of the originating bridge.
  */
+// ovs 对 tunnel port 做了优化, 如果 output action 是针对 vxlan 等 tunnel port 或者 patch port, 那么会直接连接到另一个 bridge
+// 最终在 数据面的 output port 还要在另一个 bridge 里进一步翻译 openflow 得到
+//
+// 在 ovs-dpdk 的 datapath 实际上没有 multi bridge 的概念的, 而 openflow 层却有这个概念. 所以这个概念的实现本质是在翻译的时候, 如果 output 到一个 patch port / tunnel port 的话, 就会 递归调用 翻译函数, 进一步解析 action, 一起压缩为 数据面的 flow
+//
+// out_dev 是查 router 得到的 与 bridge 同名的 local port, ref: native_tunnel_output() -> tnl_route_lookup_flow()
 static void
 patch_port_output(struct xlate_ctx *ctx, const struct xport *in_dev,
                   struct xport *out_dev)
@@ -3838,7 +3871,7 @@ patch_port_output(struct xlate_ctx *ctx, const struct xport *in_dev,
 
     ofpbuf_use_stub(&ctx->stack, new_stack, sizeof new_stack);
     ofpbuf_use_stub(&ctx->action_set, actset_stub, sizeof actset_stub);
-    flow->in_port.ofp_port = out_dev->ofp_port;
+    flow->in_port.ofp_port = out_dev->ofp_port; // flow 的 in port 被修改了, 后续在这个 flow 基础上去另一个 bridge 继续翻译
     flow->metadata = htonll(0);
     memset(&flow->tunnel, 0, sizeof flow->tunnel);
     memset(&ctx->wc->masks.tunnel, 0, sizeof ctx->wc->masks.tunnel);
@@ -3864,7 +3897,7 @@ patch_port_output(struct xlate_ctx *ctx, const struct xport *in_dev,
     if (!process_special(ctx, out_dev) && may_receive(out_dev, ctx)) {
         if (xport_stp_forward_state(out_dev) &&
             xport_rstp_forward_state(out_dev)) {
-            xlate_table_action(ctx, flow->in_port.ofp_port, 0, true, true,
+            xlate_table_action(ctx, flow->in_port.ofp_port, 0, true, true,		// HERE: 递归翻译, output 到 vxlan 等 tunnel port 或者 patch port 后就进入另一个 bridge 再次翻译, ref: native_tunnel_output() -> patch_port_output()
                                false, true, clone_xlate_actions);
             if (!ctx->freezing) {
                 xlate_action_set(ctx);
@@ -7682,7 +7715,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     }
 
     if (!xin->ofpacts && !ctx.rule) {
-        ctx.rule = rule_dpif_lookup_from_table(
+        ctx.rule = rule_dpif_lookup_from_table(		// XXX: HERE
             ctx.xbridge->ofproto, ctx.xin->tables_version, flow, ctx.wc,
             ctx.xin->resubmit_stats, &ctx.table_id,
             flow->in_port.ofp_port, true, true, ctx.xin->xcache);
@@ -7748,7 +7781,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
                 ofpacts_len = xin->ofpacts_len;
             } else if (ctx.rule) {
                 const struct rule_actions *actions
-                    = rule_get_actions(&ctx.rule->up);
+                    = rule_get_actions(&ctx.rule->up);	// XXX: HERE, 前面已经查表得到 rule 了
                 ofpacts = actions->ofpacts;
                 ofpacts_len = actions->ofpacts_len;
                 ctx.rule_cookie = ctx.rule->up.flow_cookie;
@@ -7757,7 +7790,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             }
 
             mirror_ingress_packet(&ctx);
-            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true, false);
+            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true, false);	// XXX: HERE
             if (ctx.error) {
                 goto exit;
             }

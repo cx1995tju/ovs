@@ -143,7 +143,7 @@ struct xlate_in {
 
     /* If nonnull, flow translation puts the resulting datapath actions in this
      * buffer.  If null, flow translation will not produce datapath actions. */
-    struct ofpbuf *odp_actions;
+    struct ofpbuf *odp_actions; // 翻译后的信息会放到这里的
 
     /* If nonnull, flow translation populates this with wildcards relevant in
      * translation.  Any fields that were used to calculate the action are set,

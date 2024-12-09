@@ -473,6 +473,7 @@ struct rule_actions {
     bool has_groups;
 
     /* Actions. */
+    // openflow actions
     uint32_t ofpacts_len;         /* Size of 'ofpacts', in bytes. */
     struct ofpact ofpacts[];      /* Sequence of "struct ofpacts". */
 };

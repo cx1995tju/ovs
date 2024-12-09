@@ -1332,6 +1332,7 @@ dpif_execute(struct dpif *dpif, struct dpif_execute *execute)
  * members documented in comments, and 0 in the 'error' member on success or a
  * positive errno on failure.
  */
+// 上层(i.e. ofproto-dpif) 直接调用 datapath 的能力来处理报文, 或其他动作
 void
 dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
              enum dpif_offload_type offload_type)
@@ -1365,7 +1366,7 @@ dpif_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
              * handle itself, without help. */
             size_t i;
 
-            dpif->dpif_class->operate(dpif, ops, chunk, offload_type);
+            dpif->dpif_class->operate(dpif, ops, chunk, offload_type); // %dpif_netdev_execute()
 
             for (i = 0; i < chunk; i++) {
                 struct dpif_op *op = ops[i];

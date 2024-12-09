@@ -115,6 +115,11 @@ struct smc_cache {
     struct smc_bucket buckets[SMC_BUCKET_CNT]; // 256K 大小 ???
 };
 
+// emc 插入: emc_insert()
+// emc 删除: emc_cache_slow_sweep()
+//
+// smc 插入: smc_insert
+// smc 删除: 插入 的时候冲突了就被覆盖了 ???
 struct dfc_cache {
     struct emc_cache emc_cache;
     // emc 和 megaflow 之间的一层 基于签名而不是 flow key 匹配的表

@@ -328,6 +328,7 @@ struct dpif_class {
      * dpif_op. The offload_type argument tells the provider if 'ops' should
      * be submitted to to a netdev (only offload) or to the kernel datapath
      * (never offload) or to both (offload if possible; software fallback). */
+    // 需要 dpif provider 帮助做些什么的时候就会调用这个函数
     void (*operate)(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
                     enum dpif_offload_type offload_type);
 

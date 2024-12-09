@@ -49,7 +49,13 @@ struct netdev_flow_key {
 // - 一个 subtable 中所有的 key mask 都是一样的
 // - 可以认为其是一条 megaflow
 //
-// // 插入: dpcls_insert()
+// 插入: dpcls_insert()
+// 删除: dpcls_remove() / dpcls_destroy() revalidator线程负责的, %udpif_revalidator()
+//
+// Q: megaflow 删除的时候, 底层关联的 emc, smc 怎么处理?
+//    * emc 引用 dp_netdev_flow (i.e. megaflow) 的时候有引用技术, megaflow 删除的时候, megaflow 不会释放会被标记为 dead, 后续回收 emc 的时候才释放
+//    * smc 不需要回收, 仅仅是一个 megaflow 的 cache 层, megaflow 删除后, 后面就算找到别的 flow, 无非就是匹配不上罢了
+ 
 struct dpcls_rule {
     struct cmap_node cmap_node;   /* Within struct dpcls_subtable 'rules'. */
     struct netdev_flow_key *mask; /* Subtable's mask. */ // 因为相同 mask 的 flow组织在同一个 subtable 里(dpcls_subtable), 所以 mask 是一个 per-subtable 的值, 通过指针指过去就好了

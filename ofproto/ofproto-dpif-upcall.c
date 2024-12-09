@@ -122,7 +122,8 @@ struct revalidator {
  *    - Revalidation threads which read the datapath flow table and maintains
  *      them.
  */
-//refer to open_dpif_backer
+//refer to open_dpif_backer(), udpif_create()
+//用来处理 upcall 的 ctx
 struct udpif {
     struct ovs_list list_node;         /* In all_udpifs list. */
 
@@ -204,6 +205,7 @@ enum reval_result {
     UKEY_MODIFY
 };
 
+// 处理 upcall 的时候的核心的 ctx. ref: upcall_cb()->upcall_receive()
 struct upcall {
     struct ofproto_dpif *ofproto;  /* Parent ofproto. */
     const struct recirc_id_node *recirc; /* Recirculation context. */
@@ -921,6 +923,17 @@ udpif_run_flow_rebalance(struct udpif *udpif)
     udpif_flow_rebalance(udpif);
 }
 
+/* - revalidator */
+/* 	- 处理megaflow 流表的超时删除 */
+/* 	- 响应 openflow 流表的改动 */
+/* 	- 周期性获取 datapath 流表的统计信息 */
+/* 	- ofproto_dpif_class 的 type_run 的时候创建了 revalidator 线程 */
+/* 	- revalidator从阻塞变成运行的时机 */
+/* 		1. need_revalidate 被设置 , 说明bridge或者流表配置发生变化，需要重新计算flow */
+/* 		2. pause_latch被设置，说明此线程需要暂时停止运行 */
+/* 		3. exit_latch, 说明需要将此线程退出，比如将线程数量改小后, 有一部分线程需要退出 */
+/* 		4. timeout超时后运行，最小值为500ms */
+/* 	- 简言之：flow gc的一些工作, 处理flow 流表的一些改动操作 */
 static void *
 udpif_revalidator(void *arg)
 {
@@ -1054,7 +1067,7 @@ classify_upcall(enum dpif_upcall_type type, const struct nlattr *userdata,
         break;
 
     case DPIF_UC_MISS:
-        return MISS_UPCALL;
+        return MISS_UPCALL;	// 常见, flow miss
 
     case DPIF_N_UC_TYPES:
     default:
@@ -1139,6 +1152,9 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
  * before quiescing, as the referred objects are guaranteed to exist only
  * until the calling thread quiesces.  Otherwise, do not call upcall_uninit()
  * since the 'upcall->put_actions' remains uninitialized. */
+
+/*  @backer: ref: all_dpif_backers 'ovs-netdev'
+ */
 static int
 upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
                const struct dp_packet *packet, enum dpif_upcall_type type,
@@ -1151,7 +1167,7 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
     upcall->type = classify_upcall(type, userdata, &upcall->cookie);
     if (upcall->type == BAD_UPCALL) {
         return EAGAIN;
-    } else if (upcall->type == MISS_UPCALL) {
+    } else if (upcall->type == MISS_UPCALL) { // XXX: __HERE__
         error = xlate_lookup(backer, flow, &upcall->ofproto, &upcall->ipfix,
                              &upcall->sflow, NULL, &upcall->ofp_in_port);
         if (error) {
@@ -1176,6 +1192,7 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
     upcall->packet = packet;
     upcall->ufid = ufid;
     upcall->pmd_id = pmd_id;
+    // 使用 odp_actions_stub 初始化 odp_actions
     ofpbuf_use_stub(&upcall->odp_actions, upcall->odp_actions_stub,
                     sizeof upcall->odp_actions_stub);
     ofpbuf_init(&upcall->put_actions, 0);
@@ -1194,6 +1211,13 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
     return 0;
 }
 
+/* IN:
+ *    @udpif
+ *    @upcall
+ * OUT:
+ *    @odp_actions
+ *    @wc
+ * */
 static void
 upcall_xlate(struct udpif *udpif, struct upcall *upcall,
              struct ofpbuf *odp_actions, struct flow_wildcards *wc)
@@ -1208,6 +1232,7 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
     stats.used = time_msec();
     stats.tcp_flags = ntohs(upcall->flow->tcp_flags);
 
+    // 初始化一个 ctx xin
     xlate_in_init(&xin, upcall->ofproto,
                   ofproto_dpif_get_tables_version(upcall->ofproto),
                   upcall->flow, upcall->ofp_in_port, NULL,
@@ -1235,6 +1260,7 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
 
     upcall->reval_seq = seq_read(udpif->reval_seq);
 
+    // __HERE__: 核心就是这里, 将收集的信息 xin 送进去, 得到翻译后的信息 xout
     xerr = xlate_actions(&xin, &upcall->xout);
 
     /* Translate again and log the ofproto trace for
@@ -1336,6 +1362,20 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
     return true;
 }
 
+/* IN:
+ *    @packet: 待处理的一个 packet
+ *    @flow: 从 packet 中提取的 key
+ *    @ufid: unique flow id
+ *    @pmd_id: 调用该函数的 pmd core_id
+ *    @type: upcall 的理由, 比如: DPIF_UC_MISS, DPIF_UC_ACTION
+ *    @userdata: 当 upcall 的理由是 DPIF_UC_ACTION 的时候会携带一些数据
+ *    @aux: struct udpif, ref: udpif_create()
+ *
+ * OUT:
+ *    @wc:
+ *    @actions:
+ *    @put_actions:
+ * */
 static int
 upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,	// userspace 处理 upcall 的报文。即 megaflow miss 的报文
           unsigned pmd_id, enum dpif_upcall_type type,
@@ -1349,6 +1389,8 @@ upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufi
 
     atomic_read_relaxed(&enable_megaflows, &megaflow);
 
+    // 主要是为了构造 upcall 这个 ctx, 至于为什么叫 upcall_receive() 
+    // 估计是为了兼容 ovs-kernel, 因为 ovs-kernel 用户态处理 upcall 的第一步是通过 netlink 从内核将 packet 接收到
     error = upcall_receive(&upcall, udpif->backer, packet, type, userdata,
                            flow, 0, ufid, pmd_id);
     if (error) {
@@ -1454,7 +1496,7 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
     switch (upcall->type) {
     case MISS_UPCALL:
     case SLOW_PATH_UPCALL:
-        upcall_xlate(udpif, upcall, odp_actions, wc);
+        upcall_xlate(udpif, upcall, odp_actions, wc);	// HERE
         return 0;
 
     case SFLOW_UPCALL:
@@ -2560,7 +2602,7 @@ ukey_to_flow_netdev(struct udpif *udpif, struct udpif_key *ukey)
     NL_ATTR_FOR_EACH (k, left, ukey->key, ukey->key_len) {
         enum ovs_key_attr type = nl_attr_type(k);
 
-        if (type == OVS_KEY_ATTR_IN_PORT) {
+        f (type == OVS_KEY_ATTR_IN_PORT) {
             ukey->in_netdev = netdev_ports_get(nl_attr_get_odp_port(k),
                                                dpif_type_str);
         } else if (type == OVS_KEY_ATTR_TUNNEL) {

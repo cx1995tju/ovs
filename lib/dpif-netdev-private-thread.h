@@ -82,7 +82,7 @@ struct dp_netdev_pmd_thread_ctx {
 //综上：这个结构表示一个dpdk类型的datapath的pmd thread
 // 主线程会作为 nonpmd 也有一个这个结构: dp_netdev_set_nonpmd(), 而且主线程的static_tx_qid 是 0
 struct dp_netdev_pmd_thread {
-    struct dp_netdev *dp; //表示基于dpdk 的 datapath, 一个datapath可能有很多thread的
+    struct dp_netdev *dp; //表示基于dpdk 的 datapath, 一个datapath可能有很多thread的, dpif_netdev.dp
     struct ovs_refcount ref_cnt;    /* Every reference must be refcount'ed. */
     struct cmap_node node;          /* In 'dp->poll_threads'. */ //链接到对应的datapath 结构的链表上
 

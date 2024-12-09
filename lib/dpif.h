@@ -794,7 +794,7 @@ void dpif_operate(struct dpif *, struct dpif_op **ops, size_t n_ops,
 enum dpif_upcall_type {
     DPIF_UC_MISS,               /* Miss in flow table. */
     DPIF_UC_ACTION,             /* OVS_ACTION_ATTR_USERSPACE action. */
-    DPIF_N_UC_TYPES
+    DPIF_N_UC_TYPES // ref: classify_upcall()
 };
 
 const char *dpif_upcall_type_to_string(enum dpif_upcall_type);

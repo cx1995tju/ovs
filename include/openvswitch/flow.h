@@ -108,7 +108,7 @@ struct flow {
     uint32_t dp_hash;           /* Datapath computed hash value. The exact
                                  * computation is opaque to the user space. */
     union flow_in_port in_port; /* Input port.*/
-    uint32_t recirc_id;         /* Must be exact match. */
+    uint32_t recirc_id;         /* Must be exact match. */ // ref: recirc_id_node_find()
     uint8_t ct_state;           /* Connection tracking state. */
     uint8_t ct_nw_proto;        /* CT orig tuple IP protocol. */
     uint16_t ct_zone;           /* Connection tracking zone. */

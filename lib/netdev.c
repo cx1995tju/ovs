@@ -913,7 +913,7 @@ netdev_pop_header(struct netdev *netdev, struct dp_packet_batch *batch)
     size_t i, size = dp_packet_batch_size(batch);
 
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, size, packet, batch) {
-        packet = netdev->netdev_class->pop_header(packet);
+        packet = netdev->netdev_class->pop_header(packet); // %netdev_vxlan_pop_header()
         if (packet) {
             /* Reset the offload flags if present, to avoid wrong
              * interpretation in the further packet processing when
@@ -971,7 +971,7 @@ netdev_push_header(const struct netdev *netdev,
                          "not supported: packet dropped",
                          netdev_get_name(netdev));
         } else {
-            netdev->netdev_class->push_header(netdev, packet, data);
+            netdev->netdev_class->push_header(netdev, packet, data); // %netdev_tnl_push_udp_header()
             pkt_metadata_init(&packet->md, data->out_port);
             dp_packet_batch_refill(batch, packet, i);
         }

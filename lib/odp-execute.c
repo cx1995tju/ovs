@@ -719,6 +719,8 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
                         nl_attr_get_size(subactions), dp_execute_action);
 }
 
+// Q: clone 的报文怎么处理?
+// A: clone 一份后, 将 clone 的 action 剥离掉, 露出内层的 action, 然后递归调用 odp_execute_actions 将 clone 的这些报文处理掉
 static void
 odp_execute_clone(void *dp, struct dp_packet_batch *batch, bool steal,
                    const struct nlattr *actions,
@@ -843,26 +845,50 @@ requires_datapath_assistance(const struct nlattr *a)
  * by the code that does this removal, irrespective of the value of 'steal'.
  * Otherwise, if the packet is not removed from the batch and 'steal' is false
  * then the packet could either be cloned or not. */
+
+/* batch 中的 packet 都需要执行 actions
+ *
+ * 有些 action 只能 datapath 执行, 比如: output actions, 这些 action 委托给这里的 dp_execute_action
+ *
+ * @steal: 
+ * - 如果为 true 的话, 必须负责将 packet 释放掉, 不要将 pkt 还回来
+ * - 如果为 false 的话, 那么就必须将 packet 还回来. __但是__, 可以修改 packet, 也可以 clone 一份 pkt
+ *
+ * 注: 由于 历史原因, 就算是 ovs-dpdk, actions 仍然是用 netlink 的数据结构 nlattr 来描述的
+ *
+ * 注: 数据面的 action 执行代码还是比较简单的, 关键是如何通过 openflow 解析得到数据面的 flow 的特别是 action 的生成: %handle_packet_upcall()
+ * */
+
+/* datapath 处理 action 的主体, 调用路径有几条:
+ * - ovs-dpdk 主路径: dp_netdev_execute_actions
+ * - ovs-kernel handler upcall 路径: dpif_execute_with_help
+ * - 处理一个又一个 action 的时候, 可能会递归调用:
+ *   1. odp_execute_smaple() -> 
+ *   2. odp_execute_clone() -> 
+ *   3. odp_execute_actions() ->
+*/
 void
 odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     const struct nlattr *actions, size_t actions_len,
-                    odp_execute_cb dp_execute_action)
+                    odp_execute_cb dp_execute_action) // %dp_execute_cb()
 {
     struct dp_packet *packet;
     const struct nlattr *a;
     unsigned int left;
 
+    // 从 左到右 开始迭代 actions, actions 本质就是 nlattr 的数组, 虽然 nlattr 的大小是不确定的
+    // 一个 nlattr 结构描述了一个 action
     NL_ATTR_FOR_EACH_UNSAFE (a, left, actions, actions_len) {
         int type = nl_attr_type(a);
-        bool last_action = (left <= NLA_ALIGN(a->nla_len));
+        bool last_action = (left <= NLA_ALIGN(a->nla_len)); // 是不是最后一个 action
 
         if (requires_datapath_assistance(a)) {
             if (dp_execute_action) {
                 /* Allow 'dp_execute_action' to steal the packet data if we do
                  * not need it any more. */
-                bool should_steal = steal && last_action;
+                bool should_steal = steal && last_action; // 之后是最后一个 last_action 才能 steal 走, 否则必须还回来, 因为还有 action 需要执行的. 但是 dp_execute_action 可能修改 pkt, 也可能 clone pkt 的
 
-                dp_execute_action(dp, batch, a, should_steal);
+                dp_execute_action(dp, batch, a, should_steal); // 我们的重点还是这里, 数据面怎么处理 pkt %dp_execute_cb()
 
                 if (last_action || dp_packet_batch_is_empty(batch)) {
                     /* We do not need to free the packets.
@@ -878,7 +904,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
 
         switch ((enum ovs_action_attr) type) {
 
-        case OVS_ACTION_ATTR_HASH: {
+        case OVS_ACTION_ATTR_HASH: { // 计算并设置 hash
             const struct ovs_action_hash *hash_act = nl_attr_get(a);
 
             /* Calculate a hash value directly. This might not match the
@@ -960,7 +986,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             }
             break;
 
-        case OVS_ACTION_ATTR_SET_MASKED:
+        case OVS_ACTION_ATTR_SET_MASKED: // 设置一些字段咯
             DP_PACKET_BATCH_FOR_EACH(i, packet, batch) {
                 odp_execute_masked_set_action(packet, nl_attr_get(a));
             }
@@ -990,7 +1016,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             break;
         }
 
-        case OVS_ACTION_ATTR_CLONE:
+        case OVS_ACTION_ATTR_CLONE: // 这个 action 内层还嵌入了 action 用来指导  clone 的 action 如何处理
             odp_execute_clone(dp, batch, steal && last_action, a,
                                                 dp_execute_action);
             if (last_action) {
@@ -1082,5 +1108,6 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         }
     }
 
+    // 如果要 steal 的话, 这里就删除掉
     dp_packet_delete_batch(batch, steal);
 }

@@ -887,7 +887,7 @@ dp_packet_batch_init_packet_fields(struct dp_packet_batch *batch)
 static inline void
 dp_packet_batch_apply_cutlen(struct dp_packet_batch *batch)
 {
-    if (batch->trunc) {
+    if (batch->trunc) { // ref: odp_execute_actions() case OVS_ACTION_ATTR_TRUNC
         struct dp_packet *packet;
 
         DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {

@@ -289,8 +289,8 @@ struct dp_netdev {
     /* Protects access to ofproto-dpif-upcall interface during revalidator
      * thread synchronization. */
     struct fat_rwlock upcall_rwlock;
-    upcall_callback *upcall_cb;  /* Callback function for executing upcalls. */	// 处理 megaflow miss 的报文，refer to handle_packet_upcall
-    void *upcall_aux;
+    upcall_callback *upcall_cb;  /* Callback function for executing upcalls. */	// 处理 megaflow miss 的报文，refer to handle_packet_upcall, %dpif_netdev_register_upcall_cb()
+    void *upcall_aux; // struct udp_if 结构, ref: udpif_create()
 
     /* Callback function for notifying the purging of dp flows (during
      * reseting pmd deletion). */
@@ -4066,6 +4066,9 @@ dpif_netdev_flow_dump_next(struct dpif_flow_dump_thread *thread_,
     return n_flows;
 }
 
+// 这是什么路径 ???
+// 为什么会从这条路径来处理报文, 供上层通过 dpif_execute() 调用 datapath 的能力
+// 比如: 注入一些报文, 让 datapath 处理 
 static int
 dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
     OVS_NO_THREAD_SAFETY_ANALYSIS
@@ -4765,6 +4768,7 @@ dp_netdev_process_rxq_port(struct dp_netdev_pmd_thread *pmd,
         dp_netdev_rxq_add_cycles(rxq, RXQ_CYCLES_PROC_CURR, cycles);
 
 	// 前面根据 flow 处理完报文后, 需要 send 的报文已经 pmd 的 send queue 了, 这里去发送咯
+	// ref: dp_execute_output_action()
         dp_netdev_pmd_flush_output_packets(pmd, false);	// 尝试发送报文
     } else {
         /* Discard cycles. */
@@ -7077,6 +7081,21 @@ dp_netdev_flow_used(struct dp_netdev_flow *netdev_flow, int cnt, int size,
     atomic_store_relaxed(&netdev_flow->stats.tcp_flags, flags);
 }
 
+// ovs-dpdk 的 upcall 很简单, 就是直接调用函数, 还是在 pmd 里处理
+// 如果是 ovs-kernel 就比较麻烦了, 内核要通过 netlink 将其提交到用户态
+//
+/* IN:
+ *    @pmd: 调用该函数的 pmd
+ *    @packet_: 待处理的一个 packet
+ *    @flow: 从 packet_ 中提取的 key
+ *    @type: upcall 的理由, 比如: DPIF_UC_MISS, DPIF_UC_ACTION
+ *    @ufid: unique flow id
+ *
+ * OUT:
+ *    @wc:
+ *    @actions:
+ *    @put_actions:
+ * */
 static int
 dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
                  struct flow *flow, struct flow_wildcards *wc, ovs_u128 *ufid,
@@ -7114,7 +7133,8 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
         ds_destroy(&ds);
     }
 
-    return dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata,
+    // refer to: ofproto/ofproto-dpif-upcall.c:upcall_cb()
+    return dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata, 
                          actions, wc, put_actions, dp->upcall_aux);
 }
 
@@ -7607,9 +7627,9 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
 
     /* We can't allow the packet batching in the next loop to execute
      * the actions.  Otherwise, if there are any slow path actions,
-     * we'll send the packet up twice. */
+     * we'll send the packet up twice. */								// why ???
     dp_packet_batch_init_packet(&b, packet);
-    dp_netdev_execute_actions(pmd, &b, true, &match.flow,
+    dp_netdev_execute_actions(pmd, &b, true, &match.flow, // 所以在这里把 action 执行掉, 那 output 的时候不会 reorder ?
                               actions->data, actions->size);
 
     add_actions = put_actions->size ? put_actions : actions;
@@ -7717,6 +7737,8 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
+	    // 这里会直接将 packet 的 action 执行掉, 也会插入新的 flow
+	    // 所以前面会用 dp_netdev_pmd_lookup_flow 查一次, 至于为什么不去 emc 找, 因为 emc 是概率插入的
             int error = handle_packet_upcall(pmd, packet, keys[i],	// 没有找到，那么报文就需要upcall了。在 DPDK 中，datapath 都是用户态的。也就不需要 从kernel upcall过来了。直接在这里调用函数处理就是了
                                              &actions, &put_actions);
 
@@ -7992,6 +8014,8 @@ error:
     return err;
 }
 
+// 将报文送到上层处理, 也就是 upcall 路径咯
+// 不过这里的 upcall 路径是 action 指定的, 而不是 flow miss 了, upcall 的 理由是: DPIF_UC_ACTION
 static void
 dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
                             struct dp_packet *packet, bool should_steal,
@@ -8004,6 +8028,7 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
 
     ofpbuf_clear(actions);
 
+    // upcall 路径之一
     error = dp_netdev_upcall(pmd, packet, flow, NULL, ufid,
                              DPIF_UC_ACTION, userdata, actions,
                              NULL);
@@ -8032,7 +8057,7 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
         return false;
     }
     if (!should_steal) {
-        dp_packet_batch_clone(&out, packets_);
+        dp_packet_batch_clone(&out, packets_); // 有趣, packet 还要还回去的, 所以你要 output 也只能 clone 一份的
         dp_packet_batch_reset_cutlen(packets_);
         packets_ = &out;
     }
@@ -8040,7 +8065,7 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
 #ifdef DPDK_NETDEV
     if (OVS_UNLIKELY(!dp_packet_batch_is_empty(&p->output_pkts)
                      && packets_->packets[0]->source
-                        != p->output_pkts.packets[0]->source)) {
+                        != p->output_pkts.packets[0]->source)) { // 都用的是 dpdk mbuf 咯, 这样 free 的时候可以 batch free
         /* XXX: netdev-dpdk assumes that all packets in a single
          *      output batch has the same source. Flush here to
          *      avoid memory access issues. */
@@ -8048,7 +8073,7 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
     }
 #endif
     if (dp_packet_batch_size(&p->output_pkts)
-        + dp_packet_batch_size(packets_) > NETDEV_MAX_BURST) {
+        + dp_packet_batch_size(packets_) > NETDEV_MAX_BURST) { // tx_port 中无法缓存了, 先将其中的 flush 掉
         /* Flush here to avoid overflow. */
         dp_netdev_pmd_flush_output_on_port(pmd, p);
     }
@@ -8060,7 +8085,7 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
     DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
         p->output_pkts_rxqs[dp_packet_batch_size(&p->output_pkts)] =
             pmd->ctx.last_rxq;
-        dp_packet_batch_add(&p->output_pkts, packet);
+        dp_packet_batch_add(&p->output_pkts, packet); // 所以正常情况下, 这里不会做真正的 发送操作的, 而仅仅是将 pkt 放到 output_pkts 队列里
     }
     return true;
 }
@@ -8099,6 +8124,7 @@ dp_execute_lb_output_action(struct dp_netdev_pmd_thread *pmd,
         struct dp_packet_batch output_pkt;
 
         dp_packet_batch_init_packet(&output_pkt, packet);
+        // bond 口上的 output 是做了一点封装的
         if (OVS_LIKELY(dp_execute_output_action(pmd, &output_pkt, true,
                                                 bond_member))) {
             /* Update member stats. */
@@ -8108,6 +8134,12 @@ dp_execute_lb_output_action(struct dp_netdev_pmd_thread *pmd,
     }
 }
 
+// 需要 datapath 执行的 action 会委托给这个函数执行
+// dp_netdev_execute_actions() -> odp_execute_actions() -> dp_execute_cb()
+//
+// @should_steal: 如果为 true 的话, 需要负责将 packet 释放掉
+//
+// 注: 进来的这一批 packets flow 都是一样的, 也就是 action 都是一样的
 static void
 dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
               const struct nlattr *a, bool should_steal)
@@ -8127,7 +8159,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                                  nl_attr_get_odp_port(a));
         return;
 
-    case OVS_ACTION_ATTR_LB_OUTPUT:
+    case OVS_ACTION_ATTR_LB_OUTPUT: // BOND ?
         dp_execute_lb_output_action(pmd, packets_, should_steal,
                                     nl_attr_get_u32(a));
         return;
@@ -8142,7 +8174,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         }
         dp_packet_batch_apply_cutlen(packets_);
         packet_count = dp_packet_batch_size(packets_);
-        if (push_tnl_action(pmd, a, packets_)) {
+        if (push_tnl_action(pmd, a, packets_)) { // 仅仅是 push header 了, 没有发送的
             COVERAGE_ADD(datapath_drop_tunnel_push_error,
                          packet_count);
         }
@@ -8166,7 +8198,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 dp_packet_batch_apply_cutlen(packets_);
 
                 packet_count = dp_packet_batch_size(packets_);
-                netdev_pop_header(p->port->netdev, packets_);
+                netdev_pop_header(p->port->netdev, packets_);	// XXX: __HERE__
                 packets_dropped =
                    packet_count - dp_packet_batch_size(packets_);
                 if (packets_dropped) {
@@ -8179,11 +8211,11 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
                 struct dp_packet *packet;
                 DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
-                    packet->md.in_port.odp_port = portno;
+                    packet->md.in_port.odp_port = portno;	// 注意: 这里可能修改了 in port port number
                 }
 
                 (*depth)++;
-                dp_netdev_recirculate(pmd, packets_);
+                dp_netdev_recirculate(pmd, packets_); // 头部剥离后, 重新进到数据面查流表处理处理
                 (*depth)--;
                 return;
             }
@@ -8432,6 +8464,11 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
     dp_packet_delete_batch(packets_, should_steal);
 }
 
+// ovs-dpdk 数据面的 action 执行都是从这里进入的, 有下述路径
+//  1. datapath 主路径: packet_batch_per_flow_execute() ->
+//  2. handle packet upcall 路径: handle_packet_upcall() ->
+//  3. 上层直接调用 datapath 的处理能力 dpif_netdev_execute() ->
+//  4. dp_execute_userspace_action() -> ???
 static void
 dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                           struct dp_packet_batch *packets,

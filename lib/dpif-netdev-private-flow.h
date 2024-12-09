@@ -88,6 +88,9 @@ struct dp_netdev_flow_attrs {
  * dp_netdev_flow 是一个 数据面使用的 flow, 但是其并不是 __一个精确的 flow__ , 虽然其开头有一个 const struct flow flow 结构, 但是这个结构里的 key 其实不太重要, 重要的是其中的 actions
  *
  * - emc 插入的时候, key 不是使用的这里的 flow 里的 key, 而是 从 pkt 里提取出来的key, 但是 value 会指向这个 dp_netdev_flow, 主要是为了其中的 actions 咯
+ *
+ *
+ * 注: 可以不精确的将其看作 megaflow, 因为 megaflow 就是数据面最大的 flow 了, 而这个就是数据面用的最大的 flow
  * */
 struct dp_netdev_flow {
     // miss 的时候将 pkt upcall 到 openflow 层, 这时候匹配的到 openflow 是通配的, 后续创建的 megaflow 也是通配的
@@ -161,7 +164,7 @@ void dp_netdev_flow_unref(struct dp_netdev_flow *);
 struct dp_netdev_actions {
     /* These members are immutable: they do not change during the struct's
      * lifetime.  */
-    unsigned int size;          /* Size of 'actions', in bytes. */
+    unsigned int size;          /* Size of 'actions', in bytes. */ // XXX: in bytes
     struct nlattr actions[];    /* Sequence of OVS_ACTION_ATTR_* attributes. */
 };
 
