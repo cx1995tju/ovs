@@ -30,7 +30,7 @@ enum lacp_status;
 
 /* How flows are balanced among bond member interfaces. */
 enum bond_mode {
-    BM_TCP, /* Transport Layer Load Balance. */
+    BM_TCP, /* Transport Layer Load Balance. */ // 就是 完全的 lacp
     BM_SLB, /* Source Load Balance. */
     BM_AB   /* Active Backup. */
 };

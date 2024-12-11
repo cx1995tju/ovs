@@ -1443,6 +1443,7 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
                   const struct nat_action_info_t *nat_action_info,
                   long long now, uint32_t tp_id)
 {
+    // - 如果 flow 涉及了 ct action, 那么碰到 flow 的 ip 分片的时候就需要先重组再送到 ct 处理, 等到 ct 处理完之后又要 re-frag.
     ipf_preprocess_conntrack(ct->ipf, pkt_batch, now, dl_type, zone,
                              ct->hash_basis);
 

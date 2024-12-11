@@ -149,6 +149,7 @@ enum OVS_PACKED_ENUM ofpact_type {
 };
 
 /* Define N_OFPACTS to the number of types of ofpacts. */
+// 这个定义很有趣 `+ 1 + 1 + 1` 这种写法也可以
 enum {
 #define OFPACT(ENUM, STRUCT, MEMBER, NAME) + 1
     N_OFPACTS = OFPACTS
@@ -1088,7 +1089,7 @@ struct ofpact_group {
 
 /* OFPACT_UNROLL_XLATE.
  *
- * Used only internally. */
+ * Used only internally. */ // openflow spec 里没有这个 action 的
 struct ofpact_unroll_xlate {
     OFPACT_PADDED_MEMBERS(
         struct ofpact ofpact;

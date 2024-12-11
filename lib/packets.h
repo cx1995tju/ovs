@@ -100,6 +100,15 @@ flow_tnl_equal(const struct flow_tnl *a, const struct flow_tnl *b)
 }
 
 /* Datapath packet metadata */
+/* 关于 ct 相关的字段:
+ * - ct 的匹配最简单是基于 ct_state `ct(state=ESTABLISHED)`
+ * - 为了实现租户隔离引入了 ct_zone 字段:
+ *	- `ct(zone=10, state=ESTABLISHED)`
+ *	- `ct(zone=20, state=ESTABLISHED)`
+ * - 为了进一步分类 flow, 引入了 ct_mark, mark 支持掩码
+ *	- `ct(zone=20, mark=0x1/0xff, state=+new)`
+ * - ct_label, 与 ct_mark 类似, 也支持掩码, 但是在提供一个新的维度的基础上还支持更大的空间 (128b)
+ * */
 struct pkt_metadata {
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     uint32_t recirc_id;         /* Recirculation id carried with the
@@ -109,12 +118,12 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
                                    action. */
     uint32_t skb_priority;      /* Packet priority for QoS. */
     uint32_t pkt_mark;          /* Packet mark. */
-    uint8_t  ct_state;          /* Connection state. */
+    uint8_t  ct_state;          /* Connection state. */ // %OVS_CS_F_NEW, %CS_TRACKED, ref: write_ct_md()
     bool ct_orig_tuple_ipv6;
-    uint16_t ct_zone;           /* Connection zone. */
-    uint32_t ct_mark;           /* Connection mark. */
-    ovs_u128 ct_label;          /* Connection label. */
-    union flow_in_port in_port; /* Input port. */
+    uint16_t ct_zone;           /* Connection zone. */  // ct zone action 设置的, conntrack_execute() -> wrte_ct_md() %OVS_ACTION_ATTR_CT / OVS_CT_ATTR_ZONE, 目的是实现租户隔离的, 默认值是 0
+    uint32_t ct_mark;           /* Connection mark. */  // ct action 设置
+    ovs_u128 ct_label;          /* Connection label. */ // ct action 设
+    union flow_in_port in_port; /* Input port. */ // ref: patch_port_output() in_port 会被修改的, orig_in_port 会被保留
     odp_port_t orig_in_port;    /* Originating in_port for tunneled packets */
     struct conn *conn;          /* Cached conntrack connection. */
     bool reply;                 /* True if reply direction. */

@@ -101,6 +101,7 @@ struct xbridge_addr {
     struct ovs_refcount ref_cnt;
 };
 
+// 表示一个 bridge
 struct xbridge {
     struct hmap_node hmap_node;   /* Node in global 'xbridges' map. */
     struct ofproto_dpif *ofproto; /* Key in global 'xbridges' map. */
@@ -128,6 +129,7 @@ struct xbridge {
     struct xbridge_addr *addr;
 };
 
+// 表示一个 port
 struct xbundle {
     struct hmap_node hmap_node;    /* In global 'xbundles' map. */
     struct ofbundle *ofbundle;     /* Key in global 'xbundles' map. */
@@ -155,7 +157,7 @@ struct xbundle {
     bool protected;                /* Protected port mode */
 };
 
-// tarnslate 层使用的结构
+// tarnslate 层使用的结构, 表示一个 port
 struct xport {
     struct hmap_node hmap_node;      /* Node in global 'xports' map. */
     struct ofport_dpif *ofport;      /* Key in global 'xports map. */
@@ -227,7 +229,7 @@ struct xlate_ctx {
      * to a scratch ofpbuf.  This allows code to add actions to
      * 'ctx->odp_actions' without worrying about whether the caller really
      * wants actions. */
-    struct ofpbuf *odp_actions;
+    struct ofpbuf *odp_actions; // 翻译后的结果放到这里
 
     /* Statistics maintained by xlate_table_action().
      *
@@ -279,6 +281,8 @@ struct xlate_ctx {
     * later.  We call the checkpointing process "freezing" and the restarting
     * process "thawing".
     *
+    * // openflow 翻译的时候会建立一个 frozen ctx, 同时分配一个 id, 然后呢在 datapath flow action 里插入一个 RECIRC action 携带上 id, 这样当 datapath flow 执行到了 RECIRC 后就可以使用 id 找到 fronzen data
+    * // 然后这一层可以继续接着 翻译: 通过 dp_netdev_recirculate() -> handle_packets_upcall() -> dp_execute_cb()
     * The use cases for freezing are:
     *
     *     - "Recirculation", where the translation process discovers that it
@@ -288,7 +292,7 @@ struct xlate_ctx {
     *       situations, translation freezes translation and assigns the frozen
     *       data a unique "recirculation ID", which it associates with the data
     *       in a table in userspace (see ofproto-dpif-rid.h).  It also adds a
-    *       OVS_ACTION_ATTR_RECIRC action specifying that ID to the datapath
+    *       OVS_ACTION_ATTR_RECIRC action specifying that ID to the datapath	// 使用 recirc id 可以找到一个 frozen data node ?
     *       actions.  When a packet hits that action, the datapath looks its
     *       flow up again using the ID.  If there's a miss, it comes back to
     *       userspace, which find the recirculation table entry for the ID,
@@ -310,7 +314,7 @@ struct xlate_ctx {
     *       translation isn't needed, and so bonds don't follow the above
     *       process.)
     *
-    *     - "Continuation".  A continuation is a way for an OpenFlow controller
+    *     - "Continuation".  A continuation is a way for an OpenFlow controller		// ref: man ovs-actions#The_controller_action pause option
     *       to interpose on a packet's traversal of the OpenFlow tables.  When
     *       the translation process encounters a "controller" action with the
     *       "pause" flag, it freezes translation, serializes the frozen data,
@@ -327,7 +331,7 @@ struct xlate_ctx {
     *
     *     - Any actions remaining to be translated within the current flow.
     *
-    *     - If translation was frozen within a NXAST_RESUBMIT, then any actions
+    *     - If translation was frozen within a NXAST_RESUBMIT, then any actions	// 为了支持 nested resubmit 的实现 ???
     *       following the resubmit action.  Resubmit actions can be nested, so
     *       this has to go all the way up the control stack.
     *
@@ -2967,6 +2971,8 @@ is_ip_local_multicast(const struct flow *flow, struct flow_wildcards *wc)
     }
 }
 
+// ref: man ovs-actions#The_OVS_Normal_Pipeline
+// openflow 中的 `output:normal` action 就是将 pkt 送到 normal switch 的 pipeline, 也就是这个函数做的翻译咯
 static void
 xlate_normal(struct xlate_ctx *ctx)
 {
@@ -3392,9 +3398,9 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
             }
         }
         slow = SLOW_BFD;
-    } else if (xport->xbundle && xport->xbundle->lacp
+    } else if (xport->xbundle && xport->xbundle->lacp	// 对应的 port 是 lacp
                && flow->dl_type == htons(ETH_TYPE_LACP)) {
-        if (packet) {
+        if (packet) { // 处理 lacp 报文
             lacp_may_enable = lacp_process_packet(xport->xbundle->lacp,
                                                   xport->ofport, packet);
             /* Update LACP status in bond-member to avoid packet-drops
@@ -5276,7 +5282,7 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
     case OFPP_LOCAL:
     default:
         if (port != ctx->xin->flow.in_port.ofp_port) {
-            compose_output_action(ctx, port, NULL, is_last_action, truncate);
+            compose_output_action(ctx, port, NULL, is_last_action, truncate); // 最常见路径
         } else {
             xlate_report_info(ctx, "skipping output to input port");
         }

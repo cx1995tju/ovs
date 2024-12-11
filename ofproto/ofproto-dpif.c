@@ -3243,6 +3243,7 @@ bundle_destroy(struct ofbundle *bundle)
     free(bundle);
 }
 
+// bundle 就是 port 的概念
 static int
 bundle_set(struct ofproto *ofproto_, void *aux,
            const struct ofproto_bundle_settings *s)

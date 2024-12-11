@@ -103,7 +103,7 @@ struct flow {
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. */
     ovs_be64 metadata;          /* OpenFlow Metadata. */
     uint32_t regs[FLOW_N_REGS]; /* Registers. */
-    uint32_t skb_priority;      /* Packet priority for QoS. */
+    uint32_t skb_priority;      /* Packet priority for QoS. */	// ref:xlate_set_queue_action() -> dpif_netdev_queue_to_priority()
     uint32_t pkt_mark;          /* Packet mark. */
     uint32_t dp_hash;           /* Datapath computed hash value. The exact
                                  * computation is opaque to the user space. */
@@ -111,8 +111,8 @@ struct flow {
     uint32_t recirc_id;         /* Must be exact match. */ // ref: recirc_id_node_find()
     uint8_t ct_state;           /* Connection tracking state. */
     uint8_t ct_nw_proto;        /* CT orig tuple IP protocol. */
-    uint16_t ct_zone;           /* Connection tracking zone. */
-    uint32_t ct_mark;           /* Connection mark.*/
+    uint16_t ct_zone;           /* Connection tracking zone. */ // 用来匹配 pkt_metadata 中的 ct_zone, 为 ct 创建了隔离域
+    uint32_t ct_mark;           /* Connection mark.*/ // 用来匹配 pkt_metadata 中的 ct_mark
     ovs_be32 packet_type;       /* OpenFlow packet type. */
     ovs_u128 ct_label;          /* Connection label. */
     uint32_t conj_id;           /* Conjunction ID. */
@@ -131,7 +131,7 @@ struct flow {
     /* L3 (64-bit aligned) */
     ovs_be32 nw_src;            /* IPv4 source address or ARP SPA. */
     ovs_be32 nw_dst;            /* IPv4 destination address or ARP TPA. */
-    ovs_be32 ct_nw_src;         /* CT orig tuple IPv4 source address. */
+    ovs_be32 ct_nw_src;         /* CT orig tuple IPv4 source address. */ // NAT 场景可能会修改 源目 地址, 这个保存的是原始地址
     ovs_be32 ct_nw_dst;         /* CT orig tuple IPv4 destination address. */
     struct in6_addr ipv6_src;   /* IPv6 source address. */
     struct in6_addr ipv6_dst;   /* IPv6 destination address. */

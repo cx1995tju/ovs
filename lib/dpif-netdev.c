@@ -7626,10 +7626,15 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
     }
 
     /* We can't allow the packet batching in the next loop to execute
-     * the actions.  Otherwise, if there are any slow path actions,
+     * the actions.  Otherwise, if there are any slow path actions, // OVS_ACTION_ATTR_USERSPACE, OVS_ACTION_SAMPLE_ATTR_ACTIONS  ??? ref: compose_slow_path()
      * we'll send the packet up twice. */								// why ???
+    // 所以这里的关键是添加 flow 之前将其 action 执行掉 ???
+    // 如果这里不处理, 仅仅是 添加 flow 会有什么问题 ???
+    // 进入这个函数的时候拿了: dp->upcall_rwlock 锁的, 如果在 dp_netdev_execute_actions() 的时候碰到了 OVS_ACTION_ATTR_USERSPACE 这种 action, 由于拿不到锁, 其实不会去执行 action 进而 upcall 的. 如果让其退出, 在外面处理, 那么就会又被 upcall 一次的.
+    // Q: 所以这一次 slow path action 可以不 upcall 执行么? 因为如果 上层真的需要的话, 比如一些 sample 等操作, 肯定在这一次 upcall 就做了
+    // ref: dp_execute_cb()
     dp_packet_batch_init_packet(&b, packet);
-    dp_netdev_execute_actions(pmd, &b, true, &match.flow, // 所以在这里把 action 执行掉, 那 output 的时候不会 reorder ?
+    dp_netdev_execute_actions(pmd, &b, true, &match.flow,
                               actions->data, actions->size);
 
     add_actions = put_actions->size ? put_actions : actions;
@@ -7737,7 +7742,7 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
-	    // 这里会直接将 packet 的 action 执行掉, 也会插入新的 flow
+	    // 这里会直接将 packet 的在数据面的 action 执行掉, 也会插入新的 flow
 	    // 所以前面会用 dp_netdev_pmd_lookup_flow 查一次, 至于为什么不去 emc 找, 因为 emc 是概率插入的
             int error = handle_packet_upcall(pmd, packet, keys[i],	// 没有找到，那么报文就需要upcall了。在 DPDK 中，datapath 都是用户态的。也就不需要 从kernel upcall过来了。直接在这里调用函数处理就是了
                                              &actions, &put_actions);
@@ -8268,6 +8273,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
             return;
         }
+	// 这个 lock_error 的发生是比较常见的, ref: handle_packet_upcall() 的注释
         COVERAGE_ADD(datapath_drop_lock_error,
                      dp_packet_batch_size(packets_));
         break;

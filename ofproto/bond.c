@@ -100,6 +100,7 @@ struct bond_member {
 
 /* A bond, that is, a set of network devices grouped to improve performance or
  * robustness.  */
+// ref: struct ofbundle 
 struct bond {
     struct hmap_node hmap_node; /* In 'all_bonds' hmap. */
     char *name;                 /* Name provided by client. */
