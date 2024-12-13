@@ -8216,7 +8216,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
                 struct dp_packet *packet;
                 DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
-                    packet->md.in_port.odp_port = portno;	// 注意: 这里可能修改了 in port port number
+                    packet->md.in_port.odp_port = portno;	// 注意: 这里修改了 in port port number
                 }
 
                 (*depth)++;

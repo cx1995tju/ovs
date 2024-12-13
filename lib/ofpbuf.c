@@ -418,6 +418,7 @@ ofpbuf_put_hex(struct ofpbuf *b, const char *s, size_t *n)
 
 /* Reserves 'size' bytes of headroom so that they can be later allocated with
  * ofpbuf_push_uninit() without reallocating the ofpbuf. */
+// 在 ofpbuf 头部预留一些空间
 void
 ofpbuf_reserve(struct ofpbuf *b, size_t size)
 {

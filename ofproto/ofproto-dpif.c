@@ -472,7 +472,7 @@ type_run(const char *type)	// 一些周期性的任务
         }
         backer->need_revalidate = 0;
 
-        xlate_txn_start();
+        xlate_txn_start(); // 为 xlate 层做一些事情咯
         HMAP_FOR_EACH (ofproto, all_ofproto_dpifs_by_name_node,
                        &all_ofproto_dpifs_by_name) {
             struct ofport_dpif *ofport;
@@ -863,7 +863,7 @@ bool
 ovs_native_tunneling_is_on(struct ofproto_dpif *ofproto)
 {
     return ofproto_use_tnl_push_pop
-        && ofproto->backer->rt_support.tnl_push_pop
+        && ofproto->backer->rt_support.tnl_push_pop	/* ovs-dpdk 支持的, ref: dpif_supports_tnl_push_pop() */
         && atomic_count_get(&ofproto->backer->tnl_count);
 }
 

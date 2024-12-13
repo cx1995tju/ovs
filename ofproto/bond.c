@@ -1058,7 +1058,7 @@ bond_update_post_recirc_rules__(struct bond* bond, const bool force)
    }
 
    if (update_rules) {
-        update_recirc_rules(bond);
+        update_recirc_rules(bond);	// 这里面创建了 tx_bond 结构, 后面数据面会shying
    }
 }
 
@@ -1075,7 +1075,7 @@ bond_update_post_recirc_rules(struct bond *bond, uint32_t *recirc_id,
         ovs_rwlock_wrlock(&rwlock);
         may_recirc = bond_may_recirc(bond);
         if (may_recirc) {
-            *recirc_id = bond->recirc_id;
+            *recirc_id = bond->recirc_id;		// bond->recirc_id 会成为 tx_bond.bond_id
             *hash_basis = bond->basis;
             bond_update_post_recirc_rules__(bond, false);
         }

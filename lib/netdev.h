@@ -98,6 +98,7 @@ enum netdev_pt_mode {
 };
 
 /* Configuration specific to tunnels. */
+// ref: man ovs-vswitchd.conf.db Tunnel Options
 struct netdev_tunnel_config {
     ovs_be64 in_key;
     bool in_key_present;
@@ -110,6 +111,8 @@ struct netdev_tunnel_config {
     ovs_be16 payload_ethertype;
     ovs_be16 dst_port;
 
+    // ref: man ovs-vswitchd.conf.db Tunnel Options, 当 local_ip 不是 "flow" 的时候, 其应该就是一个 ip 值, 那么对应的 tnl_port 里应该记录了这个 ip 值的
+    // ref: parse_tunnel_ip
     bool ip_src_flow;
     bool ip_dst_flow;
     struct in6_addr ipv6_src;

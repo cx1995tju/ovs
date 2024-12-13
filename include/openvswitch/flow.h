@@ -100,6 +100,9 @@ BUILD_ASSERT_DECL(FLOW_MAX_VLAN_HEADERS % 2 == 0);
 // openflow 的 key
 struct flow {
     /* Metadata */
+    // vxlan ingress 方向, pop header 的时候从 pkt 中提取出来放到 pkt_metadata.tunnel 中: ref: udp_extract_tnl_md()
+	// 如果 datapath 还没有 pop action 的还, 这里 tunnel 是谁设置的
+    // vxlan egress 方向, openflow 翻译的时候拿到的 compose_output_action__() -> tnl_port_send() / native_tunnel_output(), 这样 数据面 output 的时候就可以用 flow 里信息. egress 的是时候 flow 里 tunnel 信息是通过 upcall 在上层拿到的. 大部分信息是保存在对应的 vxlan port 的 cfg 上
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. */
     ovs_be64 metadata;          /* OpenFlow Metadata. */
     uint32_t regs[FLOW_N_REGS]; /* Registers. */
@@ -108,7 +111,7 @@ struct flow {
     uint32_t dp_hash;           /* Datapath computed hash value. The exact
                                  * computation is opaque to the user space. */
     union flow_in_port in_port; /* Input port.*/
-    uint32_t recirc_id;         /* Must be exact match. */ // ref: recirc_id_node_find()
+    uint32_t recirc_id;         /* Must be exact match. */ // ref: recirc_id_node_find(), OVS_ACTION_ATTR_RECIRC
     uint8_t ct_state;           /* Connection tracking state. */
     uint8_t ct_nw_proto;        /* CT orig tuple IP protocol. */
     uint16_t ct_zone;           /* Connection tracking zone. */ // 用来匹配 pkt_metadata 中的 ct_zone, 为 ct 创建了隔离域

@@ -63,17 +63,19 @@ struct xlate_out {
     struct recirc_refs recircs;
 };
 
+// ref: xlate_in_init() / xlate_actions()
 struct xlate_in {
-    struct ofproto_dpif *ofproto;
-    ovs_version_t        tables_version;   /* Lookup in this version. */
+    struct ofproto_dpif *ofproto;		// flow 的 in_port 所在的 switch, ref upcall_receive() upcall_xlate()->xlate_in_init()
+    ovs_version_t        tables_version;   /* Lookup in this version. */ // ofproto 对饮的 version
 
     /* Flow to which the OpenFlow actions apply.  xlate_actions() will modify
      * this flow when actions change header fields. */
-    struct flow flow;
+    // 如果 openflow 需要 change hdr 的话, 将 flow 修改后, 再次递归翻译 ???
+    struct flow flow; // upcall 的时候从 pkt 里提取的 flow, 就是要用这个 flow 去匹配一条 openflow
 
     /* Pointer to the original flow received during the upcall. xlate_actions()
      * will never modify this flow. */
-    const struct flow *upcall_flow;
+    const struct flow *upcall_flow;	// 这个指针在初始化之后就不修改了 ??? ref: xlate_in_init()
 
     /* The packet corresponding to 'flow', or a null pointer if we are
      * revalidating without a packet to refer to. */
@@ -91,10 +93,10 @@ struct xlate_in {
 
     /* The rule initiating translation or NULL. If both 'rule' and 'ofpacts'
      * are NULL, xlate_actions() will do the initial rule lookup itself. */
-    struct rule_dpif *rule;
+    struct rule_dpif *rule;	// 对应的 openflow ?? 如果是处理 packet-out 消息的时候希望得到翻译, 那么 rule(i.e. openflow) 就直接提供了. 这里的 rule 就是等待翻译的 openflow, 如果是 upcall 路径上来的时候, 会先用 前面的 datapath 的 flow 查找 openflow (i.e. rule) 然后再做翻译
 
     /* The actions to translate.  If 'rule' is not NULL, these may be NULL. */
-    const struct ofpact *ofpacts;
+    const struct ofpact *ofpacts; // openflow actions
     size_t ofpacts_len;
 
     /* Union of the set of TCP flags seen so far in this flow.  (Used only by
@@ -139,7 +141,7 @@ struct xlate_in {
      *
      * This is normally null so the client has to set it manually after
      * calling xlate_in_init(). */
-    struct xlate_cache *xcache;
+    struct xlate_cache *xcache; // xlate_resume() OFPTYPE_NXT_RESUME
 
     /* If nonnull, flow translation puts the resulting datapath actions in this
      * buffer.  If null, flow translation will not produce datapath actions. */
@@ -152,13 +154,13 @@ struct xlate_in {
      * packets, 'wc' would have the 'in_port' (always set), 'dl_type' (flow
      * match), 'vlan_tci' (normal action), and 'dl_dst' (normal action) fields
      * set. */
-    struct flow_wildcards *wc;
+    struct flow_wildcards *wc; // 翻译后的 wildcard 放到这里
 
     /* The frozen state to be resumed, as returned by xlate_lookup(). */
     const struct frozen_state *frozen_state;
 
     /* If true, the packet to be translated is from a packet_out msg. */
-    bool in_packet_out;
+    bool in_packet_out;	// 表示翻译请求不是来自于 upcall, 而是 controller 的 packet-out 消息, ref packet_xlate()
 
     /* ofproto/trace maintains this queue to trace flows that require
      * recirculation. */

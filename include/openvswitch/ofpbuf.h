@@ -54,6 +54,7 @@ enum OVS_PACKED_ENUM ofpbuf_source {
  *
  * rconn: Reuses 'header' as a private pointer while queuing.
  */
+// buf, 很多信息都用这个 buf 存储的
 struct ofpbuf {
     void *base;                 /* First byte of allocated space. */
     void *data;                 /* First byte actually in use. */

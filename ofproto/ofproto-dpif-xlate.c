@@ -129,7 +129,7 @@ struct xbridge {
     struct xbridge_addr *addr;
 };
 
-// 表示一个 port
+// 表示一个 port, 因为 有 bonding 这种 port, 其可能对应多个 interface, 所以搞了一个 bundle 来表示 port
 struct xbundle {
     struct hmap_node hmap_node;    /* In global 'xbundles' map. */
     struct ofbundle *ofbundle;     /* Key in global 'xbundles' map. */
@@ -194,6 +194,10 @@ struct xport {
     struct lldp *lldp;               /* LLDP handle or null. */
 };
 
+// 翻译过程的 ctx
+// 什么时候需要翻译呢?
+// - datapath 的 upcall: 输入: datapath flow
+// - controller 的 packet out msg: 输入: openflow
 struct xlate_ctx {
     struct xlate_in *xin;
     struct xlate_out *xout;
@@ -217,19 +221,19 @@ struct xlate_ctx {
     struct ofpbuf stack;
 
     /* The rule that we are currently translating, or NULL. */
-    struct rule_dpif *rule;
+    struct rule_dpif *rule; // ref: xlate_actions(), 需要翻译的 openflow
 
     /* Flow translation populates this with wildcards relevant in translation.
      * When 'xin->wc' is nonnull, this is the same pointer.  When 'xin->wc' is
      * null, this is a pointer to a temporary buffer. */
-    struct flow_wildcards *wc;
+    struct flow_wildcards *wc; // 翻译后的结果放到这里, 数据面 flow 的 wildcard, 用来构建 megaflow
 
     /* Output buffer for datapath actions.  When 'xin->odp_actions' is nonnull,
      * this is the same pointer.  When 'xin->odp_actions' is null, this points
      * to a scratch ofpbuf.  This allows code to add actions to
      * 'ctx->odp_actions' without worrying about whether the caller really
      * wants actions. */
-    struct ofpbuf *odp_actions; // 翻译后的结果放到这里
+    struct ofpbuf *odp_actions; // 翻译后的结果放到这里, 最重要的 数据面的 action 咯. ovs datapath actions
 
     /* Statistics maintained by xlate_table_action().
      *
@@ -253,7 +257,7 @@ struct xlate_ctx {
      */
     int depth;                  /* Current resubmit nesting depth. */
     int resubmits;              /* Total number of resubmits. */
-    bool in_action_set;         /* Currently translating action_set, if true. */
+    bool in_action_set;         /* Currently translating action_set, if true. */ // 默认情况下 ovs 的 instruction 是 apply_actions, 所以大部分时候都是翻译 action list, 注意 action list 的执行是可以重复且按照 flow 的顺序的. 但是 action set 的执行是必须按照预定的顺序的, 且只支持某些 action.
     bool in_packet_out;         /* Currently translating a packet_out msg, if
                                  * true. */
     bool pending_encap;         /* True when waiting to commit a pending
@@ -269,11 +273,11 @@ struct xlate_ctx {
     uint32_t sflow_n_outputs;   /* Number of output ports. */
     odp_port_t sflow_odp_port;  /* Output port for composing sFlow action. */
     ofp_port_t nf_output_iface; /* Output interface index for NetFlow. */
-    bool exit;                  /* No further actions should be processed. */
+    bool exit;                  /* No further actions should be processed. */ // 通知后续流程不要翻译了, 退出吧. 比如: 当前 freeze 了
     mirror_mask_t mirrors;      /* Bitmap of associated mirrors. */
     int mirror_snaplen;         /* Max size of a mirror packet in byte. */
 
-   /* Freezing Translation
+   /* Freezing Translation			__重要__
     * ====================
     *
     * At some point during translation, the code may recognize the need to halt
@@ -281,7 +285,7 @@ struct xlate_ctx {
     * later.  We call the checkpointing process "freezing" and the restarting
     * process "thawing".
     *
-    * // openflow 翻译的时候会建立一个 frozen ctx, 同时分配一个 id, 然后呢在 datapath flow action 里插入一个 RECIRC action 携带上 id, 这样当 datapath flow 执行到了 RECIRC 后就可以使用 id 找到 fronzen data
+    * // openflow 翻译的时候会建立一个 frozen ctx, 同时分配一个 id, 然后呢在 datapath flow action 里插入一个 RECIRC action 携带上 id, 这样当 datapath flow 执行到了 RECIRC 后就可以使用 id 找到 frozen data
     * // 然后这一层可以继续接着 翻译: 通过 dp_netdev_recirculate() -> handle_packets_upcall() -> dp_execute_cb()
     * The use cases for freezing are:
     *
@@ -387,14 +391,14 @@ struct xlate_ctx {
                                     * dp_hash after recirculation. */
     uint32_t dp_hash_alg;
     uint32_t dp_hash_basis;
-    struct ofpbuf frozen_actions;
+    struct ofpbuf frozen_actions; // 保存那些在 freeze 的时候还没有处理的 openflow action, ref: freeze_unroll_actions()
     const struct ofpact_controller *pause;
 
     /* True if a packet was but is no longer MPLS (due to an MPLS pop action).
      * This is a trigger for recirculation in cases where translating an action
      * or looking up a flow requires access to the fields of the packet after
      * the MPLS label stack that was originally present. */
-    bool was_mpls;
+    bool was_mpls;	// 曾经是 mpls ref: compose_mpls_pop_action()
 
     /* True if conntrack has been performed on this packet during processing
      * on the current bridge. This is used to determine whether conntrack
@@ -572,8 +576,10 @@ static void output_normal(struct xlate_ctx *, const struct xbundle *,
                           const struct xvlan *);
 
 /* Optional bond recirculation parameter to compose_output_action(). */
+// 有些 bond 口的 output 是基于 recirc 实现的
+// 先 翻译 output 前的 action, 等到 output 的时候, 再上来计算 hash 进而选择 output port
 struct xlate_bond_recirc {
-    uint32_t recirc_id;  /* !0 Use recirculation instead of output. */
+    uint32_t recirc_id;  /* !0 Use recirculation instead of output. */ // ref: output_normal()
     uint8_t  hash_alg;   /* !0 Compute hash for recirc before. */
     uint32_t hash_basis;  /* Compute hash for recirc before. */
 };
@@ -1178,7 +1184,7 @@ xlate_xport_copy(struct xbridge *xbridge, struct xbundle *xbundle,
  *
  *     xlate_txn_start();
  *     ...
- *     edit_xlate_configuration();
+ *     edit_xlate_configuration();	xlate_remote_ofproto() xlate_ofproto_set() xlate_port_set() xlate_ofport_set() ....
  *     ...
  *     xlate_txn_commit();
  *
@@ -1199,6 +1205,7 @@ xlate_txn_commit(void)
 /* Copies the current xlate configuration in xcfgp to new_xcfg.
  *
  * This needs to be called prior to editing the xlate configuration. */
+// 从上层调用下来, 维护 xlate 层的一些结构咯
 void
 xlate_txn_start(void)
 {
@@ -1244,6 +1251,8 @@ xlate_xcfg_free(struct xlate_cfg *xcfg)
     free(xcfg);
 }
 
+// 关键, 上层通过这个函数将 xlate 需要的 配置信息传递下来, xlate 层基于这些信息维护了 
+// xbridge / xport 等抽象
 void
 xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
                   struct dpif *dpif,
@@ -1502,7 +1511,8 @@ xlate_ofport_remove(struct ofport_dpif *ofport)
     xlate_xport_remove(new_xcfg, xport);
 }
 
-/* IN
+/* 找到 flow 关联的 bridge 和 in_port
+ * IN
  *    @backer
  *    @flow
  * OUT:
@@ -1519,7 +1529,7 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
     const struct xport *xport;
 
     /* If packet is recirculated, xport can be retrieved from frozen state. */
-    if (flow->recirc_id) {
+    if (flow->recirc_id) { // 说明之前被 frezze 过, ref: OVS_ACTION_ATTR_RECIRC
         const struct recirc_id_node *recirc_id_node;
 
         recirc_id_node = recirc_id_node_find(flow->recirc_id);
@@ -1609,11 +1619,11 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
  *    @backer
  *    @flow
  * OUT:
- *    @ofprotop
+ *    @ofprotop:  flow 关联的 bridge
  *    @ipfix
  *    @sflow
  *    @netflow
- *    @ofp_in_port
+ *    @ofp_in_port: flow 关联的 in port
  * */
 int
 xlate_lookup(const struct dpif_backer *backer, const struct flow *flow,
@@ -2215,6 +2225,9 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
     }
 }
 
+/* 调用这个函数后, 不是无条件 mirror 的还是 要看 bridge 是不是开启了
+ *
+ * */
 static void
 mirror_ingress_packet(struct xlate_ctx *ctx)
 {
@@ -2458,14 +2471,14 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
     } else if (!out_xbundle->bond) {
         xport = CONTAINER_OF(ovs_list_front(&out_xbundle->xports), struct xport,
                              bundle_node);
-    } else {
+    } else { // 说明是 bond, bond 口的 output 必须从 normal port 走 ???
         struct flow_wildcards *wc = ctx->wc;
         struct ofport_dpif *ofport;
 
         if (ctx->xbridge->support.odp.recirc) {
             /* In case recirculation is not actually in use, 'xr.recirc_id'
              * will be set to '0', since a valid 'recirc_id' can
-             * not be zero.  */
+             * not be zero.  */	// 是说从 这个函数返回后 recirc_id 的值
             bond_update_post_recirc_rules(out_xbundle->bond,
                                           &xr.recirc_id,
                                           &xr.hash_basis);
@@ -3267,6 +3280,7 @@ compose_sample_action(struct xlate_ctx *ctx,
  * to fill it out is not available until flow translation is complete.  In this
  * case, this functions returns an offset, which is always nonzero, to pass
  * later to fix_sflow_action() to fill in the rest of the template. */
+// 如果 bridge 上开启了 sflow 那么就会添加一个 sample action. 和 openflow 本身没有直接关系
 static size_t
 compose_sflow_action(struct xlate_ctx *ctx)
 {
@@ -3379,7 +3393,7 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
     struct flow_wildcards *wc = ctx->wc;
     const struct xbridge *xbridge = ctx->xbridge;
     const struct dp_packet *packet = ctx->xin->packet;
-    enum slow_path_reason slow;
+    enum slow_path_reason slow; // 到底是什么特殊报文
     bool lacp_may_enable;
 
     if (!xport) {
@@ -3428,7 +3442,7 @@ process_special(struct xlate_ctx *ctx, const struct xport *xport)
         slow = 0;
     }
 
-    if (slow) {
+    if (slow) { // 说明真的有 slow 报文处理
         ctx->xout->slow |= slow;
         return true;
     } else {
@@ -4140,6 +4154,7 @@ terminate_native_tunnel(struct xlate_ctx *ctx, struct flow *flow,
         }
     }
 
+    // 找到了 tnl_port
     return *tnl_port != ODPP_NONE;
 }
 
@@ -4167,6 +4182,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
     BUILD_ASSERT_DECL(FLOW_WC_SEQ == 42);
     memset(&flow_tnl, 0, sizeof flow_tnl);
 
+    // 检查 output 的 port 是否允许
     if (!check_output_prerequisites(ctx, xport, flow, check_stp)) {
         return;
     }
@@ -4179,7 +4195,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         }
     }
 
-    if (xport->peer) {
+    if (xport->peer) { // patch port
        if (truncate) {
            xlate_report_error(ctx, "Cannot truncate output to patch port");
        }
@@ -4193,12 +4209,13 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
     if (count_skb_priorities(xport)) {
         memset(&wc->masks.skb_priority, 0xff, sizeof wc->masks.skb_priority);
         if (dscp_from_skb_priority(xport, flow->skb_priority, &dscp)) {
-            wc->masks.nw_tos |= IP_DSCP_MASK;
+            wc->masks.nw_tos |= IP_DSCP_MASK;	// 这都在收集 flow 信息
             flow->nw_tos &= ~IP_DSCP_MASK;
             flow->nw_tos |= dscp;
         }
     }
 
+    // 这是一个 tunnel port
     if (xport->is_tunnel) {
         struct in6_addr dst;
          /* Save tunnel metadata so that changes made due to
@@ -4212,21 +4229,21 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             goto out; /* restore flow_nw_tos */
         }
         dst = flow_tnl_dst(&flow->tunnel);
-        if (ipv6_addr_equals(&dst, &ctx->orig_tunnel_ipv6_dst)) {
+        if (ipv6_addr_equals(&dst, &ctx->orig_tunnel_ipv6_dst)) {	// 从这个 port 过来
             xlate_report(ctx, OFT_WARN, "Not tunneling to our own address");
             goto out; /* restore flow_nw_tos */
         }
         if (ctx->xin->resubmit_stats) {
             netdev_vport_inc_tx(xport->netdev, ctx->xin->resubmit_stats);
         }
-        if (ctx->xin->xcache) {
+        if (ctx->xin->xcache) {	// 一般是 NULL
             struct xc_entry *entry;
 
             entry = xlate_cache_add_entry(ctx->xin->xcache, XC_NETDEV);
             entry->dev.tx = netdev_ref(xport->netdev);
         }
         out_port = odp_port;
-        if (ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) {
+        if (ovs_native_tunneling_is_on(ctx->xbridge->ofproto)) { // ovs-dpdk 走这里
             xlate_report(ctx, OFT_DETAIL, "output to native tunnel");
             is_native_tunnel = true;
         } else {
@@ -4245,8 +4262,9 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
 
     if (out_port != ODPP_NONE) {
         /* Commit accumulated flow updates before output. */
-        xlate_commit_actions(ctx);
+        xlate_commit_actions(ctx);// 如果走的 ovs-dpdk, 这里还没有 actions 的
 
+	// balance-tcp(i.e lacp) 开启了 lb-output-action 的话走这里
         if (xr && bond_use_lb_output_action(xport->xbundle->bond)) {
             /*
              * If bond mode is balance-tcp and optimize balance tcp is enabled
@@ -4255,9 +4273,12 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
              *
              * Currently support for netdev datapath only.
              */
+	    // 看上去只有 output_normal 的时候 xr 才不是 NULL
+	    // 非 normal pipeline 的时候 不能走这条路 ??? why ???
             nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_LB_OUTPUT,
-                           xr->recirc_id);
+                           xr->recirc_id); // 此时这个 recirc_id 是 0 ???
         } else if (xr) {
+	    // 基于 RECIRC 来实现 bond hash
             /* Recirculate the packet. */
             struct ovs_action_hash *act_hash;
 
@@ -4281,9 +4302,11 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             native_tunnel_output(ctx, xport, flow, odp_port, truncate);
             flow->tunnel = flow_tnl; /* Restore tunnel metadata */
 
-        } else if (terminate_native_tunnel(ctx, flow, wc,
-                                           &odp_tnl_port)) {
+        } else if (terminate_native_tunnel(ctx, flow, wc,  // ref: https://docs.openvswitch.org/en/latest/howto/userspace-tunneling/ 中的 拓扑配置. 从 dpdk 收到后, 会 output 到 br-phy(i.e LOCAL) 这个 port ??? 然后发现 匹配 vxlan flow 后就找到一个 tunnel port, 然后在数据面通过 POP action 穿越到 br-int bridge
+                                           &odp_tnl_port)) {		// 什么情况会走到这条路径
             /* Intercept packet to be received on native tunnel port. */
+	    // 物理口收到的报文会 output 到 vxlan port 的 ????
+	    // ingress 方向的处理, 为什么是在 compose_output_action__() 里
             nl_msg_put_odp_port(ctx->odp_actions, OVS_ACTION_ATTR_TUNNEL_POP,
                                 odp_tnl_port);
 
@@ -5240,6 +5263,10 @@ xlate_delete_field(struct xlate_ctx *ctx,
  *
  * 'truncate' should be true if the packet to be output is being truncated,
  * which suppresses certain optimizations. */
+
+/* output:CONTROLLER action 会有 controller_len 的限制的
+ * ref: openflow spec Ch7.2.6.1 output action structures
+ * */
 static void
 xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
                     uint16_t controller_len, bool may_packet_in,
@@ -5251,17 +5278,17 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
     ctx->nf_output_iface = NF_OUT_DROP;
 
     switch (port) {
-    case OFPP_IN_PORT:
+    case OFPP_IN_PORT: // output:IN_PORT
         compose_output_action(ctx, ctx->xin->flow.in_port.ofp_port, NULL,
                               is_last_action, truncate);
         break;
-    case OFPP_TABLE:
+    case OFPP_TABLE: // 仅仅在 packet-out message 的 list of actions 中出现的时候才有效
         xlate_table_action(ctx, ctx->xin->flow.in_port.ofp_port,
                            0, may_packet_in, true, false, false,
                            do_xlate_actions);
         break;
     case OFPP_NORMAL:
-        xlate_normal(ctx);
+        xlate_normal(ctx);	// 走到 normal pipeline 了
         break;
     case OFPP_FLOOD:
         flood_packets(ctx, false, is_last_action);
@@ -5280,11 +5307,11 @@ xlate_output_action(struct xlate_ctx *ctx, ofp_port_t port,
     case OFPP_NONE:
         break;
     case OFPP_LOCAL:
-    default:
+    default:		/* HERE */
         if (port != ctx->xin->flow.in_port.ofp_port) {
             compose_output_action(ctx, port, NULL, is_last_action, truncate); // 最常见路径
         } else {
-            xlate_report_info(ctx, "skipping output to input port");
+            xlate_report_info(ctx, "skipping output to input port");	// openflow spec 规定, 如果需要 output to input port 必须用 `output:IN_PORT` action
         }
         break;
     }
@@ -6783,6 +6810,7 @@ xlate_ofpact_unroll_xlate(struct xlate_ctx *ctx,
                  "cookie=%#"PRIx64, a->rule_table_id, a->rule_cookie);
 }
 
+// ofpacts: 等待翻译的 action
 static void
 do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                  struct xlate_ctx *ctx, bool is_last_action,
@@ -6799,6 +6827,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         return;
     }
 
+    // 所有 openflow action 已经被保存在 ofpacts 了, 整个 ofpacts 的长度是 ofpacts_len in bytes
     OFPACT_FOR_EACH (a, ofpacts, ofpacts_len) {
         struct ofpact_controller *controller;
         const struct ofpact_metadata *metadata;
@@ -6811,12 +6840,12 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             break;
         }
 
-        recirc_for_mpls(a, ctx);
+        recirc_for_mpls(a, ctx); // 前面已经遭遇了 mpls 的 action 了, 这里 freeze 住, 然后退出咯
 
         if (ctx->exit) {
             /* Check if need to store the remaining actions for later
              * execution. */
-            if (ctx->freezing) {
+            if (ctx->freezing) { // a 到 end 之间没有翻译的 openflow action 先保存到 ctx->frozen_actions 里
                 freeze_unroll_actions(a, ofpact_end(ofpacts, ofpacts_len),
                                       ctx);
             }
@@ -7239,7 +7268,7 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
     xin->tables_version = version;
     xin->flow = *flow;
     xin->upcall_flow = flow;
-    xin->flow.in_port.ofp_port = in_port;
+    xin->flow.in_port.ofp_port = in_port;	// flow 可以做一些基本的设置了, ref comments: `union flow_in_port`
     xin->flow.actset_output = OFPP_UNSET;
     xin->packet = packet;
     xin->allow_side_effects = packet != NULL;
@@ -7413,7 +7442,7 @@ xlate_wc_init(struct xlate_ctx *ctx)
     flow_wildcards_init_catchall(ctx->wc);
 
     /* Some fields we consider to always be examined. */
-    WC_MASK_FIELD(ctx->wc, packet_type);
+    WC_MASK_FIELD(ctx->wc, packet_type); // flow_wildcards.flow.FILED 这些字段被设置为 全 1
     WC_MASK_FIELD(ctx->wc, in_port);
     WC_MASK_FIELD(ctx->wc, dl_type);
     if (is_ip_any(&ctx->xin->flow)) {
@@ -7505,14 +7534,17 @@ xlate_wc_finish(struct xlate_ctx *ctx)
     }
 }
 
-/* Translates the flow, actions, or rule in 'xin' into datapath actions in
+/* Translates the flow, actions, or rule in 'xin' into datapath actions in	// 提供的参数可以是 flow + actions, 也可以是 rule
  * 'xout'.
  * The caller must take responsibility for eventually freeing 'xout', with
  * xlate_out_uninit().
  * Returns 'XLATE_OK' if translation was successful.  In case of an error an
  * empty set of actions will be returned in 'xin->odp_actions' (if non-NULL),
  * so that most callers may ignore the return value and transparently install a
- * drop flow when the translation fails. */
+ * drop flow when the translation fails.
+ * - 如果是 upcall 路径过来的, 输入就是: datapath flow 希望在 openflow 层找到 openflow 并且得到翻译 ???
+ * - 如果是 packet-out 路径过来的, 那么传入的就是 controller 给的 openflow 了, 这里就不需要查找直接翻译咯 ???
+ * */
 enum xlate_error
 xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 {
@@ -7589,13 +7621,13 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     memset(&ctx.base_flow.tunnel, 0, sizeof ctx.base_flow.tunnel);
 
     ofpbuf_reserve(ctx.odp_actions, NL_A_U32_SIZE);
-    xlate_wc_init(&ctx);
+    xlate_wc_init(&ctx); // wildcard 做一些初始化
 
     COVERAGE_INC(xlate_actions);
 
     xin->trace = xlate_report(&ctx, OFT_BRIDGE, "bridge(\"%s\")",
                               xbridge->name);
-    if (xin->frozen_state) {
+    if (xin->frozen_state) { // frozen 路径, ref: before comments `Freezing Translation`
         const struct frozen_state *state = xin->frozen_state;
 
         struct ovs_list *old_trace = xin->trace;
@@ -7678,8 +7710,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         goto exit;
     }
 
+    /* HERE */
     /* Tunnel metadata in udpif format must be normalized before translation. */
-    if (flow->tunnel.flags & FLOW_TNL_F_UDPIF) {
+    if (flow->tunnel.flags & FLOW_TNL_F_UDPIF) { // normalized tunnel info
         const struct tun_table *tun_tab = ofproto_get_tun_tab(
             &ctx.xbridge->ofproto->up);
         int err;
@@ -7719,8 +7752,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         flow->dl_dst = eth_addr_zero;
         ctx.pending_encap = true;
     }
+    // 前面代码都还是在搜集各种信息存储到 ctx
 
-    if (!xin->ofpacts && !ctx.rule) {
+    if (!xin->ofpacts && !ctx.rule) { // xin 中没有 openflow 信息供翻译, 那么先利用 datapath flow 等信息查找 openflow, 有些路径过来的时候, 这些信息已经准备好就不需要查找了
         ctx.rule = rule_dpif_lookup_from_table(		// XXX: HERE
             ctx.xbridge->ofproto, ctx.xin->tables_version, flow, ctx.wc,
             ctx.xin->resubmit_stats, &ctx.table_id,
@@ -7756,26 +7790,29 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         }
     }
 
-    if (!xin->frozen_state && process_special(&ctx, in_port)) {
+    // 一些特殊报文的处理: lacp, lldp 等
+    if (!xin->frozen_state && process_special(&ctx, in_port)) {		// __ XXX: HERE__
         /* process_special() did all the processing for this packet.
          *
          * We do not perform special processing on thawed packets, since that
          * was done before they were frozen and should not be redone. */
-        mirror_ingress_packet(&ctx);
+	    // 真的处理了 slow pkt 的话, 就会走到这里
+        mirror_ingress_packet(&ctx); // 尝试做一下 mirror, 真的做的话, 还是要 ctx 对应的 bridge 开启了的
     } else if (in_port && in_port->xbundle
                && xbundle_mirror_out(xbridge, in_port->xbundle)) {
         xlate_report_error(&ctx, "dropping packet received on port "
                            "%s, which is reserved exclusively for mirroring",
                            in_port->xbundle->name);
-    } else {
+    } else {	// __HERE__
         /* Sampling is done on initial reception; don't redo after thawing. */
+	    // 这里也可以看出来, 在 datapath flow 中的 action, SAMPLE action 应该是第一个 action
         unsigned int user_cookie_offset = 0;
         if (!xin->frozen_state) {
-            user_cookie_offset = compose_sflow_action(&ctx);
+            user_cookie_offset = compose_sflow_action(&ctx); // 尝试添加一个 sample action
             compose_ipfix_action(&ctx, ODPP_NONE);
         }
         size_t sample_actions_len = ctx.odp_actions->size;
-        bool ecn_drop = !tnl_process_ecn(flow);
+        bool ecn_drop = !tnl_process_ecn(flow); // ???
 
         if (!ecn_drop
             && (!in_port || may_receive(in_port, &ctx))) {
@@ -7785,9 +7822,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             if (xin->ofpacts) {
                 ofpacts = xin->ofpacts;
                 ofpacts_len = xin->ofpacts_len;
-            } else if (ctx.rule) {
+            } else if (ctx.rule) {	// 一般这里
                 const struct rule_actions *actions
-                    = rule_get_actions(&ctx.rule->up);	// XXX: HERE, 前面已经查表得到 rule 了
+                    = rule_get_actions(&ctx.rule->up);	// XXX: HERE, 前面已经查表得到 rule 了, 拿到 openflow action
                 ofpacts = actions->ofpacts;
                 ofpacts_len = actions->ofpacts_len;
                 ctx.rule_cookie = ctx.rule->up.flow_cookie;
@@ -7796,7 +7833,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
             }
 
             mirror_ingress_packet(&ctx);
-            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true, false);	// XXX: HERE
+            do_xlate_actions(ofpacts, ofpacts_len, &ctx, true, false);	// XXX: HERE			这里是翻译的主体
             if (ctx.error) {
                 goto exit;
             }

@@ -58,6 +58,8 @@ struct vl_mff_map;
  *
  * 4. <NAME>, a quoted string that gives the name of the action, for use in
  *    parsing actions from text.
+ *
+ * // 注意并不是和 Openflow 完全对应的
  */
 #define OFPACTS                                                         \
     /* Output. */                                                       \
@@ -201,6 +203,7 @@ struct ofpact {
     uint16_t len;               /* Length of the action, in bytes, including
                                  * struct ofpact, excluding padding. */
 };
+// 后面紧跟着数据
 BUILD_ASSERT_DECL(sizeof(struct ofpact) == 4);
 
 /* Alignment. */

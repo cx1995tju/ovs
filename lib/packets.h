@@ -138,6 +138,7 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
 );
 
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline2,
+ // vxlan ingress 方向, pop header 的时候从 pkt 中提取出来放到 pkt_metadata.tunnel 中: ref: udp_extract_tnl_md()
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. Note that
                                  * if 'ip_dst' == 0, the rest of the fields may
                                  * be uninitialized. */

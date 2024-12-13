@@ -304,6 +304,10 @@ tnl_port_del(const struct ofport_dpif *ofport, odp_port_t odp_port)
  *
  * Callers should verify that 'flow' needs to be received by calling
  * tnl_port_should_receive() before this function. */
+// upcall 的时候, 会用 flow 去查找一个 `struct tnl_port_in`, 这个结构里有 megaflow, 表示符合 megaflow 的 flow 都被看作是从 tunnel port 进来的
+// ref: https://docs.openvswitch.org/en/latest/howto/userspace-tunneling/
+//
+// 就是判断这个 flow 的pkt 是否应该被看作是从某个 ofport 收上来的
 const struct ofport_dpif *
 tnl_port_receive(const struct flow *flow) OVS_EXCLUDED(rwlock)
 {
@@ -393,6 +397,8 @@ tnl_wc_init(struct flow *flow, struct flow_wildcards *wc)
  * 'tnl_port', updates 'flow''s tunnel headers and returns the actual datapath
  * port that the output should happen on.  May return ODPP_NONE if the output
  * shouldn't occur. */
+// 更新 flow 的 tunnel 成员
+// 而且会 return actual datapath port
 odp_port_t
 tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
               struct flow_wildcards *wc) OVS_EXCLUDED(rwlock)
@@ -400,7 +406,7 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
     const struct netdev_tunnel_config *cfg;
     struct tnl_port *tnl_port;
     char *pre_flow_str = NULL;
-    odp_port_t out_port;
+    odp_port_t out_port; // ovs datapath port
 
     fat_rwlock_rdlock(&rwlock);
     tnl_port = tnl_find_ofport(ofport);
@@ -416,7 +422,7 @@ tnl_port_send(const struct ofport_dpif *ofport, struct flow *flow,
         pre_flow_str = flow_to_string(flow, NULL);
     }
 
-    if (!cfg->ip_src_flow) {
+    if (!cfg->ip_src_flow) { // ref: man ovs-vswitchd.conf.db Tunnel Options, 当 local_ip 不是 "flow" 的时候, 其应该就是一个 ip 值, 那么对应的 tnl_port 里应该记录了这个 ip 值的
         flow->tunnel.ip_src = in6_addr_get_mapped_ipv4(&tnl_port->match.ipv6_src);
         if (!flow->tunnel.ip_src) {
             flow->tunnel.ipv6_src = tnl_port->match.ipv6_src;
@@ -545,6 +551,7 @@ tnl_find_exact(struct tnl_match *match, struct hmap *map)
 
 /* Returns the tnl_port that is the best match for the tunnel data in 'flow',
  * or NULL if no tnl_port matches 'flow'. */
+// 根据 flow 携带的信息为其匹配一个 tunnel port
 static struct tnl_port *
 tnl_find(const struct flow *flow) OVS_REQ_RDLOCK(rwlock)
 {

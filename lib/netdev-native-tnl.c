@@ -210,7 +210,7 @@ udp_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
     }
 
     tnl->tp_src = udp->udp_src;
-    tnl->tp_dst = udp->udp_dst;
+    tnl->tp_dst = udp->udp_dst;	// 注意: 如果 extract 的时候是 ingress 方向, 那么这里的 udp_dst 就是自己
 
     return udp + 1;
 }

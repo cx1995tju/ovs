@@ -139,7 +139,7 @@ struct udpif {
     struct latch exit_latch;           /* Tells child threads to exit. */
 
     /* Revalidation. */
-    struct seq *reval_seq;             /* Incremented to force revalidation. */
+    struct seq *reval_seq;             /* Incremented to force revalidation. */	// 用来支持 flow 回收的 ?
     bool reval_exit;                   /* Set by leader on 'exit_latch. */
     struct ovs_barrier reval_barrier;  /* Barrier used by revalidators. */
     struct dpif_flow_dump *dump;       /* DPIF flow dump state. */
@@ -193,7 +193,7 @@ enum upcall_type {
     BAD_UPCALL,                 /* Some kind of bug somewhere. */
     MISS_UPCALL,                /* A flow miss.  */
     SLOW_PATH_UPCALL,           /* Slow path upcall.  */
-    SFLOW_UPCALL,               /* sFlow sample. */
+    SFLOW_UPCALL,               /* sFlow sample. */	// 在 upcall 的时候会判断一个 flow 关联的 bridge 是否开启了 sflow 等功能, 如果是的话, 会为该 flow 注入 OVS_SAMPLE_ATTR_ACTIONS 这种 action, 后续同样 flow 的 pkt 就算命中了也会被 upcall 上来
     FLOW_SAMPLE_UPCALL,         /* Per-flow sampling. */
     IPFIX_UPCALL,               /* Per-bridge sampling. */
     CONTROLLER_UPCALL           /* Destined for the controller. */
@@ -214,11 +214,11 @@ struct upcall {
     /* The flow and packet are only required to be constant when using
      * dpif-netdev.  If a modification is absolutely necessary, a const cast
      * may be used with other datapaths. */
-    const struct flow *flow;       /* Parsed representation of the packet. */
+    const struct flow *flow;       /* Parsed representation of the packet. */	// missed flow
     enum odp_key_fitness fitness;  /* Fitness of 'flow' relative to ODP key. */
-    const ovs_u128 *ufid;          /* Unique identifier for 'flow'. */
-    unsigned pmd_id;               /* Datapath poll mode driver id. */
-    const struct dp_packet *packet;   /* Packet associated with this upcall. */
+    const ovs_u128 *ufid;          /* Unique identifier for 'flow'. */	// 底层给 flow 分配的 id, 传进来供 openflow 翻译层使用
+    unsigned pmd_id;               /* Datapath poll mode driver id. */ // 处理这个 pkt 的 pmd id 
+    const struct dp_packet *packet;   /* Packet associated with this upcall. */	// upcall 的 pkt
     ofp_port_t ofp_in_port;        /* OpenFlow in port, or OFPP_NONE. */
     uint16_t mru;                  /* If !0, Maximum receive unit of
                                       fragmented IP packet */
@@ -229,9 +229,9 @@ struct upcall {
 
     bool xout_initialized;         /* True if 'xout' must be uninitialized. */
     struct xlate_out xout;         /* Result of xlate_actions(). */
-    struct ofpbuf odp_actions;     /* Datapath actions from xlate_actions(). */
+    struct ofpbuf odp_actions;     /* Datapath actions from xlate_actions(). */		// xlate 翻译后的 action 
     struct flow_wildcards wc;      /* Dependencies that megaflow must match. */
-    struct ofpbuf put_actions;     /* Actions 'put' in the fastpath. */
+    struct ofpbuf put_actions;     /* Actions 'put' in the fastpath. */ // 有些 action 必须在 slow path 解决 ???
 
     struct dpif_ipfix *ipfix;      /* IPFIX pointer or NULL. */
     struct dpif_sflow *sflow;      /* SFlow pointer or NULL. */
@@ -804,6 +804,7 @@ udpif_upcall_handler(void *arg)
     return NULL;
 }
 
+// ovs-kernel 的 upcall 走这条路径 ?
 static size_t
 recv_upcalls(struct handler *handler)
 {
@@ -1164,7 +1165,7 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
 {
     int error;
 
-    upcall->type = classify_upcall(type, userdata, &upcall->cookie);
+    upcall->type = classify_upcall(type, userdata, &upcall->cookie); // %MISS_UPCALL
     if (upcall->type == BAD_UPCALL) {
         return EAGAIN;
     } else if (upcall->type == MISS_UPCALL) { // XXX: __HERE__
@@ -1213,10 +1214,10 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
 
 /* IN:
  *    @udpif
- *    @upcall
+ *    @upcall: upcall 需要的 ctx 都在这里了
  * OUT:
- *    @odp_actions
- *    @wc
+ *    @odp_actions: 存储翻译后的 action 结果
+ *    @wc: 存储翻译后的 flow wildcard 结果
  * */
 static void
 upcall_xlate(struct udpif *udpif, struct upcall *upcall,
@@ -1376,6 +1377,7 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
  *    @actions:
  *    @put_actions:
  * */
+// ovs-dpdk: dp_netdev_upcall() -> upcall_cb()
 static int
 upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,	// userspace 处理 upcall 的报文。即 megaflow miss 的报文
           unsigned pmd_id, enum dpif_upcall_type type,
@@ -1389,7 +1391,7 @@ upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufi
 
     atomic_read_relaxed(&enable_megaflows, &megaflow);
 
-    // 主要是为了构造 upcall 这个 ctx, 至于为什么叫 upcall_receive() 
+    // 从 packet flow 中提取出信息构造 upcall 这个 ctx, 至于为什么叫 upcall_receive() 
     // 估计是为了兼容 ovs-kernel, 因为 ovs-kernel 用户态处理 upcall 的第一步是通过 netlink 从内核将 packet 接收到
     error = upcall_receive(&upcall, udpif->backer, packet, type, userdata,
                            flow, 0, ufid, pmd_id);
@@ -1499,7 +1501,7 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
         upcall_xlate(udpif, upcall, odp_actions, wc);	// HERE
         return 0;
 
-    case SFLOW_UPCALL:
+    case SFLOW_UPCALL:	// 采样
         if (upcall->sflow) {
             struct dpif_sflow_actions sflow_actions;
 
@@ -1513,7 +1515,7 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
         }
         break;
 
-    case IPFIX_UPCALL:
+    case IPFIX_UPCALL: // 采样
     case FLOW_SAMPLE_UPCALL:
         if (upcall->ipfix) {
             struct flow_tnl output_tunnel_key;

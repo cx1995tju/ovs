@@ -358,7 +358,7 @@ enum OVS_PACKED_ENUM rule_state {
                        * removed from the classifier as well. */
 };
 
-//表示流表
+//表示 openflow 流表
 struct rule {
     /* Where this rule resides in an OpenFlow switch.
      *

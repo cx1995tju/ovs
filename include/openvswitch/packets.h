@@ -26,10 +26,12 @@ extern "C" {
 #endif
 
 /* Tunnel information used in flow key and metadata. */
+// 注意 如果是 ingress 的时候 pop header 提取的信息, 下面 xxx_dst 信息, 其实指的是 local, 而不是 peer
+// ref: udp_extract_tnl_md
 struct flow_tnl {
     ovs_be32 ip_dst;
     struct in6_addr ipv6_dst;
-    ovs_be32 ip_src;
+    ovs_be32 ip_src;	// ref: man tunnel options: pkt_metadata 中有些字段可能是从 pkt 里提取的, 有些字段可能是前置的其他 flow 设置的
     struct in6_addr ipv6_src;
     ovs_be64 tun_id;
     uint16_t flags;

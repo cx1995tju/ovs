@@ -1042,7 +1042,7 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
 	OVS_ACTION_ATTR_DROP,          /* u32 xlate_error. */
-	OVS_ACTION_ATTR_LB_OUTPUT,     /* u32 bond-id. */
+	OVS_ACTION_ATTR_LB_OUTPUT,     /* u32 bond-id. */ // ref: man ovs-vswitchd.conf.db lb-output-action. 这时候 output bond port 的话, 就在数据面做 rss, 而不是在 openflow 翻译层基于 RECIRC action 来做 rss
 #endif
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */
