@@ -304,10 +304,6 @@ tnl_port_del(const struct ofport_dpif *ofport, odp_port_t odp_port)
  *
  * Callers should verify that 'flow' needs to be received by calling
  * tnl_port_should_receive() before this function. */
-// upcall 的时候, 会用 flow 去查找一个 `struct tnl_port_in`, 这个结构里有 megaflow, 表示符合 megaflow 的 flow 都被看作是从 tunnel port 进来的
-// ref: https://docs.openvswitch.org/en/latest/howto/userspace-tunneling/
-//
-// 就是判断这个 flow 的pkt 是否应该被看作是从某个 ofport 收上来的
 const struct ofport_dpif *
 tnl_port_receive(const struct flow *flow) OVS_EXCLUDED(rwlock)
 {

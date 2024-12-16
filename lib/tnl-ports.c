@@ -282,6 +282,9 @@ tnl_port_map_delete(odp_port_t port, const char type[])
 
 /* 'flow' is non-const to allow for temporary modifications during the lookup.
  * Any changes are restored before returning. */
+// 这里是 tunnel ingress 流量被吸过来的关键
+// 使用 `ovs-appctl tnl/port/show -v` 可以看到哪些流量被认为是 tunnel 流量会得到特殊处理
+// ref `struct tnl_port_in`
 odp_port_t
 tnl_port_map_lookup(struct flow *flow, struct flow_wildcards *wc)
 {

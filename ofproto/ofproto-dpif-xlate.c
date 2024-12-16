@@ -4260,7 +4260,17 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         out_port = odp_port;
     }
 
-    if (out_port != ODPP_NONE) {
+    /* 使用 ovs-vsctl add-bond 添加的 port 是 ovs 上的逻辑 port, openflow 无法感知,
+     * 这个 port 没有 openflow 的 port no, 所以无法将其作为 output action 的参数.
+     * 相反 bond port 底下的 interface 才是有 openflow 的 port no 的, 这一点可以使用:
+     * `ovs-ofctl show` 命令验证
+     *
+     * 所以下发 openflow 的时候, 如果使用 output action, 那么就必须直接指定 bond port
+     * 底下的 interface 作为参数. 那么也就无法做 hash 了.
+     *
+     * 如果希望在 bond port 上做 hash, 那么 bond port 的 output 必须是基于 output:NORMAL 的
+     * */
+    if (out_port != ODPP_NONE) { // 什么情况是 ODPP_NONE
         /* Commit accumulated flow updates before output. */
         xlate_commit_actions(ctx);// 如果走的 ovs-dpdk, 这里还没有 actions 的
 
@@ -4275,6 +4285,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
              */
 	    // 看上去只有 output_normal 的时候 xr 才不是 NULL
 	    // 非 normal pipeline 的时候 不能走这条路 ??? why ???
+	    // 看上去必须使用 normal action 才能在 bond port 上做 load balance, 直接用 output action 的话, 无法将 bond 这个逻辑端口作为 output 的 参数, 必须直接指定 bond 底层的 interface 作为参数
             nl_msg_put_u32(ctx->odp_actions, OVS_ACTION_ATTR_LB_OUTPUT,
                            xr->recirc_id); // 此时这个 recirc_id 是 0 ???
         } else if (xr) {
@@ -4313,7 +4324,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
         } else {
             /* Tunnel push-pop action is not compatible with
              * IPFIX action. */
-            compose_ipfix_action(ctx, out_port);
+            compose_ipfix_action(ctx, out_port); // 里面有条件判断的, 不是一定就 ipfix 的
 
             /* Handle truncation of the mirrored packet. */
             if (ctx->mirror_snaplen > 0 &&
