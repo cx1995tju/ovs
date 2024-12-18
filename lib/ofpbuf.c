@@ -363,7 +363,7 @@ ofpbuf_put_uninit(struct ofpbuf *b, size_t size)
     void *p;
     ofpbuf_prealloc_tailroom(b, size);
     p = ofpbuf_tail(b);
-    b->size += size;
+    b->size += size;	/* HERE */
     return p;
 }
 

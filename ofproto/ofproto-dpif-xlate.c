@@ -206,7 +206,7 @@ struct xlate_ctx {
     const struct xbridge *xbridge;
 
     /* Flow at the last commit. */
-    struct flow base_flow;
+    struct flow base_flow; // ref: xlate_commit_actions() xin.flow 会在 action 翻译过程中被修改, 然后在 xlate_commit_actions() 中比较 flow 和这里的 base_flow 就知道 pkt 里的哪些 field 需要被修改, 这样就可以通过 xlate_commit_actions() 将其转换为 datapath 的 action 了
 
     /* Tunnel IP destination address as received.  This is stored separately
      * as the base_flow.tunnel is cleared on init to reflect the datapath
@@ -218,7 +218,7 @@ struct xlate_ctx {
 
     /* Stack for the push and pop actions.  See comment above nx_stack_push()
      * in nx-match.c for info on how the stack is stored. */
-    struct ofpbuf stack;
+    struct ofpbuf stack; // 支持 push / pop stack actions
 
     /* The rule that we are currently translating, or NULL. */
     struct rule_dpif *rule; // ref: xlate_actions(), 需要翻译的 openflow
@@ -328,7 +328,7 @@ struct xlate_ctx {
     *
     * The main problem of freezing translation is preserving state, so that
     * when the translation is thawed later it resumes from where it left off,
-    * without disruption.  In particular, actions must be preserved as follows:
+    * without disruption.  In particular, actions must be preserved as follows:		// freeze 的时候需要保存什么信息
     *
     *     - If we're freezing because an action needed more information, the
     *       action that prompted it.
@@ -391,7 +391,7 @@ struct xlate_ctx {
                                     * dp_hash after recirculation. */
     uint32_t dp_hash_alg;
     uint32_t dp_hash_basis;
-    struct ofpbuf frozen_actions; // 保存那些在 freeze 的时候还没有处理的 openflow action, ref: freeze_unroll_actions()
+    struct ofpbuf frozen_actions; // 保存那些在 freeze 的时候还完全没有处理的 openflow action, ref: freeze_unroll_actions()
     const struct ofpact_controller *pause;
 
     /* True if a packet was but is no longer MPLS (due to an MPLS pop action).
@@ -406,7 +406,7 @@ struct xlate_ctx {
     bool conntracked;
 
     /* Pointer to an embedded NAT action in a conntrack action, or NULL. */
-    struct ofpact_nat *ct_nat_action;
+    struct ofpact_nat *ct_nat_action;	// 保存 nat 相关参数
 
     /* OpenFlow 1.1+ action set.
      *
@@ -415,7 +415,7 @@ struct xlate_ctx {
      * converts it to a set of "struct ofpact"s that can be translated into
      * datapath actions. */
     bool action_set_has_group;  /* Action set contains OFPACT_GROUP? */
-    struct ofpbuf action_set;   /* Action set. */
+    struct ofpbuf action_set;   /* Action set. */	// 实现 action set
 
     enum xlate_error error;     /* Translation failed. */
 };
@@ -3817,6 +3817,8 @@ native_tunnel_output(struct xlate_ctx *ctx, const struct xport *xport,
     return 0;
 }
 
+// 很重要, 很多 set field 的 action 都仅仅是设置了 flow 里的一些参数, 其实还没有生成 datapath action 的
+// 最终都是通过这里的 commit 并且结合 flow 里的内容来生成 action 的
 static void
 xlate_commit_actions(struct xlate_ctx *ctx)
 {
@@ -4206,11 +4208,11 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
     memcpy(flow_vlans, flow->vlans, sizeof flow_vlans);
     flow_nw_tos = flow->nw_tos;
 
-    if (count_skb_priorities(xport)) {
+    if (count_skb_priorities(xport)) { // ref: xlate_enqueue_action()
         memset(&wc->masks.skb_priority, 0xff, sizeof wc->masks.skb_priority);
         if (dscp_from_skb_priority(xport, flow->skb_priority, &dscp)) {
             wc->masks.nw_tos |= IP_DSCP_MASK;	// 这都在收集 flow 信息
-            flow->nw_tos &= ~IP_DSCP_MASK;
+            flow->nw_tos &= ~IP_DSCP_MASK; // 这里修改了 nw_tos 然后在退出的时候又恢复了, 有什么用呢?
             flow->nw_tos |= dscp;
         }
     }
@@ -4272,7 +4274,10 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
      * */
     if (out_port != ODPP_NONE) { // 什么情况是 ODPP_NONE
         /* Commit accumulated flow updates before output. */
-        xlate_commit_actions(ctx);// 如果走的 ovs-dpdk, 这里还没有 actions 的
+	// ref: do_xlate_actions() case OFPACT_ENQUEUE. 的时候修改了 flow 里的 skb_priority
+	// 然后调用 output 函数发送 pkt, 这里面需要将 flow 里的修改转换为 action commit 出去
+	// 等到从这里返回的时候 即本函数最后面, 会将 flow 原本的内容又都恢复了
+        xlate_commit_actions(ctx);
 
 	// balance-tcp(i.e lacp) 开启了 lb-output-action 的话走这里
         if (xr && bond_use_lb_output_action(xport->xbundle->bond)) {
@@ -4318,6 +4323,8 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
             /* Intercept packet to be received on native tunnel port. */
 	    // 物理口收到的报文会 output 到 vxlan port 的 ????
 	    // ingress 方向的处理, 为什么是在 compose_output_action__() 里
+	    // 因为在 br-phy 这个 bridge 里从 物理口收到后, output 到 br-phy bridge 同名的 local port 的时候, 进入这里的
+	    // 然后 POP action 的参数是 odp_tnl_port 也就是 vxlan_sys_4789 完成了 br-phy -> br-int 的穿越
             nl_msg_put_odp_port(ctx->odp_actions, OVS_ACTION_ATTR_TUNNEL_POP,
                                 odp_tnl_port);
 
@@ -4340,6 +4347,7 @@ compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                 }
             }
 
+	    // 默认最常用路径
             nl_msg_put_odp_port(ctx->odp_actions,
                                 OVS_ACTION_ATTR_OUTPUT,
                                 out_port);
@@ -4384,6 +4392,8 @@ xlate_recursively(struct xlate_ctx *ctx, struct rule_dpif *rule,
     ovs_be64 old_cookie = ctx->rule_cookie;
     const struct rule_actions *actions;
 
+    // 保存了 old_rule
+    // ctx 的 其他成员如果在内层被更改了, 那么就会被更改的.
     if (ctx->xin->resubmit_stats) {
         rule_dpif_credit_stats(rule, ctx->xin->resubmit_stats, false);
     }
@@ -4397,7 +4407,7 @@ xlate_recursively(struct xlate_ctx *ctx, struct rule_dpif *rule,
     actions_xlator(actions->ofpacts, actions->ofpacts_len, ctx,
                    is_last_action, false);
     ctx->rule_cookie = old_cookie;
-    ctx->rule = old_rule;
+    ctx->rule = old_rule;	// 这里又恢复了
     ctx->depth -= deepens;
 }
 
@@ -4478,6 +4488,7 @@ xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
         ctx_trigger_freeze(ctx);
         return;
     }
+    // 保存了 old_table_id
     if (xlate_resubmit_resource_check(ctx)) {
         uint8_t old_table_id = ctx->table_id;
         struct rule_dpif *rule;
@@ -4566,9 +4577,10 @@ xlate_group_bucket(struct xlate_ctx *ctx, struct ofputil_bucket *bucket,
     struct ofpbuf action_list = OFPBUF_STUB_INITIALIZER(action_list_stub);
     struct ofpbuf action_set = ofpbuf_const_initializer(bucket->ofpacts,
                                                         bucket->ofpacts_len);
-    struct flow old_flow = ctx->xin->flow;
+    struct flow old_flow = ctx->xin->flow; // 保存下 old flow, 最后还是要恢复的. ref: openflow group action 的语义
     bool old_was_mpls = ctx->was_mpls;
 
+    // action_set 转换为 action_list 然后去翻译
     ofpacts_execute_action_set(&action_list, &action_set);
     ctx->depth++;
     do_xlate_actions(action_list.data, action_list.size, ctx, is_last_action,
@@ -4749,6 +4761,7 @@ pick_select_group(struct xlate_ctx *ctx, struct group_dpif *group)
     return NULL;
 }
 
+// 注意: group 的 action bucket 是 action set 不是 action list
 static void
 xlate_group_action__(struct xlate_ctx *ctx, struct group_dpif *group,
                      bool is_last_action)
@@ -4756,7 +4769,7 @@ xlate_group_action__(struct xlate_ctx *ctx, struct group_dpif *group,
     if (group->up.type == OFPGT11_ALL || group->up.type == OFPGT11_INDIRECT) {
         struct ovs_list *last_bucket = group->up.buckets.prev;
         struct ofputil_bucket *bucket;
-        LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {
+        LIST_FOR_EACH (bucket, list_node, &group->up.buckets) {	// 所有 bucket 都需要执行
             bool is_last_bucket = &bucket->list_node == last_bucket;
             xlate_group_bucket(ctx, bucket, is_last_action && is_last_bucket);
         }
@@ -4789,6 +4802,7 @@ static bool
 xlate_group_action(struct xlate_ctx *ctx, uint32_t group_id,
                    bool is_last_action)
 {
+    // 执行 group bucket 里的 action
     if (xlate_resubmit_resource_check(ctx)) {
         struct group_dpif *group;
 
@@ -4908,6 +4922,7 @@ put_controller_user_action(struct xlate_ctx *ctx,
                              false, ctx->odp_actions, NULL);
 }
 
+// 发送消息给 controller 咯, 触发 packet-in 消息的产生
 static void
 xlate_controller_action(struct xlate_ctx *ctx, int len,
                         enum ofp_packet_in_reason reason,
@@ -4995,6 +5010,7 @@ xlate_controller_action(struct xlate_ctx *ctx, int len,
  * state.  Returns a non-zero recirc id if it is allocated successfully.
  * Returns 0 otherwise.
  **/
+// 这里 PUSH 了一个 RECIRC action
 static uint32_t
 finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
 {
@@ -5056,7 +5072,7 @@ finish_freezing__(struct xlate_ctx *ctx, uint8_t table)
     }
 
     /* Undo changes done by freezing. */
-    ctx_cancel_freeze(ctx);
+    ctx_cancel_freeze(ctx); // 因为 已经通过 recirc 保存了 freezing ctx, 这里将其恢复, 这样对上层来看就是正常翻译结束了的.
     return recirc_id;
 }
 
@@ -5425,6 +5441,8 @@ xlate_enqueue_action(struct xlate_ctx *ctx,
     int error;
 
     /* Translate queue to priority. */
+    // 通过 queue_id 来得到 priority
+    // priority 是如何在数据面发送的时候体现的呢? 现在仅仅是保存到了 flow 里
     error = dpif_queue_to_priority(ctx->xbridge->dpif, queue_id, &priority);
     if (error) {
         /* Fall back to ordinary output action. */
@@ -5443,9 +5461,10 @@ xlate_enqueue_action(struct xlate_ctx *ctx,
 
     /* Add datapath actions. */
     flow_priority = ctx->xin->flow.skb_priority;
-    ctx->xin->flow.skb_priority = priority;
+    // 修改下 flow 的 skb_priority, 然后通过 output action clone 一份发送出去了
+    ctx->xin->flow.skb_priority = priority;	// 设置了 flow 的 action, 注意当前 flow 表示的是对应 pkt 的信息. 但是 pkt 的 metadata 里没有这个 priority 的
     compose_output_action(ctx, ofp_port, NULL, is_last_action, false);
-    ctx->xin->flow.skb_priority = flow_priority;
+    ctx->xin->flow.skb_priority = flow_priority;	// 还是要恢复之前的 priority 的
 
     /* Update NetFlow output port. */
     if (ctx->nf_output_iface == NF_OUT_DROP) {
@@ -5490,6 +5509,7 @@ member_enabled_cb(ofp_port_t ofp_port, void *xbridge_)
     }
 }
 
+// 根据一些参数和算法在一个 port list 中选择一个 port
 static void
 xlate_bundle_action(struct xlate_ctx *ctx,
                     const struct ofpact_bundle *bundle,
@@ -5730,6 +5750,8 @@ xlate_sample_action(struct xlate_ctx *ctx,
  * Openflow actions that do not emit datapath actions are trivially
  * reversible. Reversiblity of other actions depends on nature of
  * action and their translation.  */
+
+// ref: comments on clone_xlate_actions()
 static bool
 reversible_actions(const struct ofpact *ofpacts, size_t ofpacts_len)
 {
@@ -5822,6 +5844,14 @@ clone_xlate_actions(const struct ofpact *actions, size_t actions_len,
     size_t offset, ac_offset;
     struct flow old_flow = ctx->xin->flow;
 
+    // ref: man ovs-action, clone action 不会复制数据包的, 而是保存了数据包的状态, 当其返回的时候将其恢复, 然后继续执行
+    // clone(...) action 里带的有些 action 直接去翻译然后附加到 odp_action 中就可以了. 而有些在 datpath 的时候必须真的去
+    // clone 一个去执行, 然后恢复. 
+    // 举例: `clone(output:2),output:3` 在数据面可以直接翻译为: output:2,output3 两个 action, 将嵌套的结构扁平化了, 有点尾递归优化的意思了
+    //
+    // 而对于: `clone(outout_trunc:2),output:3` 这个 action, 由于 output_trunc 会截断 pkt, 这样原始 pkt 被破坏了就不能 直接 output 到 3 了. 所以我们在 datapath 就必须插入一个 clone action, 这个 clone action 的参数是 output_trunc. 也就是保留了 openflow 层面嵌套的概念.
+    //
+    // 注: 有些 action 虽然会改变 pkt 的状态, 比如改变了 stack, 但是我们在这个函数里可以记录下 old 值, 然后恢复, 所以还是可以将其扁平化.
     if (reversible_actions(actions, actions_len) || is_last_action) {
         old_flow = ctx->xin->flow;
         do_xlate_actions(actions, actions_len, ctx, is_last_action, false);
@@ -6002,6 +6032,7 @@ xlate_action_set(struct xlate_ctx *ctx)
     ofpbuf_uninit(&action_list);
 }
 
+// 有些 action 解冻的时候需要一些额外的信息, 所以用 unroll 保存起来
 static void
 freeze_put_unroll_xlate(struct xlate_ctx *ctx)
 {
@@ -6028,6 +6059,7 @@ static void
 freeze_unroll_actions(const struct ofpact *a, const struct ofpact *end,
                       struct xlate_ctx *ctx)
 {
+    // 将还没有翻译的 action freeze 起来
     for (; a < end; a = ofpact_next(a)) {
         switch (a->type) {
         case OFPACT_OUTPUT_REG:
@@ -6289,6 +6321,9 @@ compose_conntrack_action(struct xlate_ctx *ctx, struct ofpact_conntrack *ofc,
     ctx->ct_nat_action = NULL;
     ctx->wc->masks.ct_mark = 0;
     ctx->wc->masks.ct_label = OVS_U128_ZERO;
+    // ref man ovs-action ct 本身支持一些 action 的 exec
+    // 这里也可以看得出来, 翻译之后在数据面会先执行这些 action, 然后再执行 CT action
+    // ct action 的其他部分翻译比较简单基本和数据面的 CT action 完全匹配
     do_xlate_actions(ofc->actions, ofpact_ct_get_action_len(ofc), ctx,
                      is_last_action, false);
 
@@ -6803,6 +6838,7 @@ xlate_ofpact_reg_move(struct xlate_ctx *ctx, const struct ofpact_reg_move *a)
 static void
 xlate_ofpact_stack_pop(struct xlate_ctx *ctx, const struct ofpact_stack *a)
 {
+    // stack 里的内容用来修改 flow, 最后在 commit action 的时候将 flow 里的变化转换为 action
     if (nxm_execute_stack_pop(a, &ctx->xin->flow, ctx->wc, &ctx->stack)) {
         xlate_report_subfield(ctx, &a->subfield);
     } else {
@@ -6822,6 +6858,45 @@ xlate_ofpact_unroll_xlate(struct xlate_ctx *ctx,
 }
 
 // ofpacts: 等待翻译的 action
+// - output action: 里面做的工作远远不止简单的 找端口 然后 output
+//	- 有一些 action 基本是 output 的变种
+//		- BUNDLE
+//		- OUTPUT_REG 
+//		- OUTPUT_TRUNC
+//
+// - set field 类 action (含 move/load action, write metadata, encap/decap)
+//	- 对于 set-field 这种需要修改 pkt (或者其 metadata) 的 action
+//	- 都是通过修改 flow 里的字段, 然后在 commit_odp_actions() 里比较 flow 和 base flow 的差异 完成相关 action 的 commmit 的
+//
+// - group action
+//	- 知道一个 group 以及 相关 bucket, 然后执行 action set 的翻译. 最后会重新调用 do_xlate_actions() 这个函数, 不过输入的 ofpacts 是 bucket 里的 action set,而 group_bucket_action 也是 true 了. ref: xlate_group_bucket.
+//
+// - program 类型 action
+//	- RESUBMIT action: 是 ovs 的扩展, openflow 原生不支持
+//	- GOTO-Table instruction:  这是 openflow 原生的 sub-process 概念. 但是必须是小的 table 号向大的 table 号跳
+//	- STACK_PUSH/POP action: ovs 的扩展, 引入了 stack, 研究引入了 state 使得网络控制面编程的概念更深入了
+//		- xlate_ctx 中有一个 stack 结构实现 stack, 为什么不需要在 flow 里呢. 因为 stack 里的内容仅仅在翻译的过程中使用, 翻译结束后, 就可以被丢弃的. datapath 不需要. 而 datapath 需要的内容会在 POP action 的处理里将其保存到 flow 里. 最后还是通过比较 flow 和 base_flow 的不同完成 action 的 commit 的
+//	- MULTIPATH action: 类似计算 hash 后, 将信息存储到 flow 里, 等到 commit action 的时候转换为 action
+//	- clone: ref: comments clone_xlate_actions()
+//		- clone action 在 openflow 里也表达了一种子过程的概念. 这里翻译的时候做了一个优化, 大部分情况下可以在数据面消除掉这种子过程的调用, 将其扁平化
+//
+// - firewall action
+//	- ct: ref comments on compose_conntrack_action()
+//	- ct_clear: 清理该清理的, 然后添加一个数据面的 CT_CLEAR action 咯
+//	- learn: 根据参数创建新的 openflow 咯, 不涉及 datapath 咯
+//	- fin_timeout: 并不会直接影响数据路径, 找到 对应的 openflow 流表, 改一些 timeout 参数咯
+//
+// - conjunction ???
+//	- 不是一个 真正的 action, 而是通过 action 表达一种 联合匹配的概念, 所以其 action 的语义是在 match 路径真正体现的
+//	- ref: classifier_lookup__() -> find_conjunctive_match()
+//
+// 注: 这里的 ofpact 虽然是 Openflow action, 但是和 openflow spec 不是完全对应的:
+// - ovs 本身就扩充了 openflow spec
+// - 有些 ovs-action 中定义的 action 在 ovs 里存储的时候本身有一些改变的, 比如:
+//	- OFPACT_CONJUNCTION
+//	- OFPACT_NAT
+// - 为了支持翻译增加的一些 acion: UNROLL_XLATE, RECIRC
+// - 为了 debug 增加的一些 action: DEBUG_RECIRC
 static void
 do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                  struct xlate_ctx *ctx, bool is_last_action,
@@ -6856,6 +6931,8 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         if (ctx->exit) {
             /* Check if need to store the remaining actions for later
              * execution. */
+	    // 在 循环的开头判断, 其实是为了判断上一次迭代是否被 freezing 了,
+	    // 这样 freeze_unroll_actions freeze 的就是完全没有被 翻译的 action (而不是翻译了一半的)
             if (ctx->freezing) { // a 到 end 之间没有翻译的 openflow action 先保存到 ctx->frozen_actions 里
                 freeze_unroll_actions(a, ofpact_end(ofpacts, ofpacts_len),
                                       ctx);
@@ -6890,10 +6967,10 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         case OFPACT_CONTROLLER:
             controller = ofpact_get_CONTROLLER(a);
-            if (controller->pause) {
+            if (controller->pause) { // freeze 了
                 ctx->pause = controller;
                 ctx_trigger_freeze(ctx);
-                a = ofpact_next(a);
+                a = ofpact_next(a); // 为什么要主动 next ??? 因为 switc-case 语句结束的时候会被 freeze, 来不及回到 for-loop 的开头, 如果不 next 一下, 被 freeze 的就是当前已经被处理的的 action
             } else {
                 xlate_controller_action(ctx, controller->max_len,
                                         controller->reason,
@@ -6911,7 +6988,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                                  group_bucket_action);
             break;
 
-        case OFPACT_SET_VLAN_VID:
+        case OFPACT_SET_VLAN_VID: // 就是修改了 flow, 没有增加 action 有什么意义呢? 在 xlate_commit_actions() 里利用这些信息来生成 action 的
             wc->masks.vlans[0].tci |= htons(VLAN_VID_MASK | VLAN_CFI);
             if (flow->vlans[0].tci & htons(VLAN_CFI) ||
                 ofpact_get_SET_VLAN_VID(a)->push_vlan_if_needed) {
@@ -7014,13 +7091,35 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
 
         /* Freezing complicates resubmit and goto_table.  Some action in the
          * flow entry found by resubmit might trigger freezing.  If that
-         * happens, then we do not want to execute the resubmit or goto_table
+         * happens, then we do not want to execute the resubmit or goto_table				why continue ??? 
          * again after during thawing, so we want to skip back to the head of
          * the loop to avoid that, only adding any actions that follow the
          * resubmit to the frozen actions.
+	 *
+	 *
+	 * ref commit: 6b1c573408f8771e428707278f86c5b3b076
+	 * 
+	 *	ofproto-dpif-xlate: Do not execute resubmit again after recirculation.
+	 *
+	 *      Consider the following flow table:
+	 *     
+	 *      table=0 actions=resubmit(,1),2
+	 *      table=1 actions=debug_recirc		// 翻译的时候走到这里, 会递归进入 do_xlate_action, 然后在内层会 freeze ctx 的. 由于这里的 action 只有一个, 在 case OFPACT_DEBUG_RECIRC 的 ofpact_next(a) 直接让 a 走到了 ofpact end. 那么内层在 switch-case 的 if 语句里其实什么都没有 unroll, 
+	 *						// 那么从 xlate_ofpact_resubmit 返回的时候, ctx_first_frozen_action(ctx) 还是成立, 另外由于 ctx->exit = true, ctx->freezing = true. 那么这一次就会进入 switch-case 后的 if 语句, 回去 unroll
+	 *						// __但是__ 需要注意的是, xlate_ofpact_resubmit() 后面没有调用 ofpact_next() 那么 又被 freeze 的 action 就是当前正在处理的 resubmit(,1) 这个 action, 那么当解冻的时候就会陷入 infinite loop. 所以这里用 cotinue, 让其回到开头在开头位置退出. 这样经过了 for-loop 的 ofpact_next() 被 freeze 的 action 就是 这里的 table 0 的 output:2 这个 action 了
+	 *						Q: 在 table 1 的 debug_recirc freeze 了, 解冻的时候 action 2 会被漏掉么 ? 不会, 这里会跳到 for-loop 开头将当前这一层剩下的 action freeze 起来
+	 *     
+	 *      When debug_recirc triggers recirculation and we later resume processing,
+	 *      only the output to port 2 should be executed, because the effects of
+	 *      "resubmit" have already taken place.  However, until now, the "resubmit"
+	 *      was added to the actions to execute post-recirculation, resulting in an
+	 *      infinite loop.
+	 *
+	 *
+	 *
          */
         case OFPACT_RESUBMIT:
-            xlate_ofpact_resubmit(ctx, ofpact_get_RESUBMIT(a), last);
+            xlate_ofpact_resubmit(ctx, ofpact_get_RESUBMIT(a), last); // resubmit 里如果 freeze 了, 会将内层 table 的 action unroll 都 frozen_action 里, 这里需要跳到 for-loop 开头, 将当前剩下的部分也 freeze 起来
             continue;
         case OFPACT_GOTO_TABLE:
             xlate_table_action(ctx, ctx->xin->flow.in_port.ofp_port,
@@ -7032,6 +7131,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             flow->tunnel.tun_id = htonll(ofpact_get_SET_TUNNEL(a)->tun_id);
             break;
 
+	// enqueue action 在 openflow1.1 开始被废弃, 现在使用: set_queue:queue,output:port,pop_queue 代替
         case OFPACT_SET_QUEUE:
             memset(&wc->masks.skb_priority, 0xff,
                    sizeof wc->masks.skb_priority);
@@ -7214,7 +7314,7 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                 /* Recirculate for parsing of inner packet. */
                 ctx_trigger_freeze(ctx);
                 /* Then continue with next action. */
-                a = ofpact_next(a);
+                a = ofpact_next(a); // 为什么要主动 next ??? 因为 switc-case 语句结束的时候会被 freeze, 来不及回到 for-loop 的开头, 如果不 next 一下, 被 freeze 的就是当前已经被处理的 action
             }
             break;
         }
@@ -7229,14 +7329,14 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             }
             break;
 
-        case OFPACT_NAT:
+        case OFPACT_NAT: // 所以 openflow 层面的 ct(nat) 在 ovs 的 openflow 组织的时候会被组织为 NAT + CT action 咯
             /* This will be processed by compose_conntrack_action(). */
             ctx->ct_nat_action = ofpact_get_NAT(a);
             break;
 
         case OFPACT_DEBUG_RECIRC:
             ctx_trigger_freeze(ctx);
-            a = ofpact_next(a);
+            a = ofpact_next(a); // 为什么要主动 next ??? 因为 switc-case 语句结束的时候会被 freeze, 来不及回到 for-loop 的开头, 如果不 next 一下, 被 freeze 的就是当前已经被处理的的 action
             break;
 
         case OFPACT_DEBUG_SLOW:
@@ -7260,7 +7360,11 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
         }
 
         /* Check if need to store this and the remaining actions for later
-         * execution. */
+         * execution.
+	 *
+	 * 标记了 exit 而且没有 error, 而且没有被 freeze, 那么主动将其 freeze 起来
+	 *
+	 * */
         if (!ctx->error && ctx->exit && ctx_first_frozen_action(ctx)) {
             freeze_unroll_actions(a, ofpact_end(ofpacts, ofpacts_len), ctx);
             break;
@@ -7332,6 +7436,7 @@ get_skb_priority(const struct xport *xport, uint32_t skb_priority)
     return NULL;
 }
 
+// priority 转换为 dscp 值
 static bool
 dscp_from_skb_priority(const struct xport *xport, uint32_t skb_priority,
                        uint8_t *dscp)
@@ -7638,7 +7743,7 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
 
     xin->trace = xlate_report(&ctx, OFT_BRIDGE, "bridge(\"%s\")",
                               xbridge->name);
-    if (xin->frozen_state) { // frozen 路径, ref: before comments `Freezing Translation`
+    if (xin->frozen_state) { // thawing 解冻路径, ref: before comments `Freezing Translation`
         const struct frozen_state *state = xin->frozen_state;
 
         struct ovs_list *old_trace = xin->trace;

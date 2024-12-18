@@ -105,12 +105,20 @@ struct flow {
     // vxlan egress 方向, openflow 翻译的时候拿到的 compose_output_action__() -> tnl_port_send() / native_tunnel_output(), 这样 数据面 output 的时候就可以用 flow 里信息. egress 的是时候 flow 里 tunnel 信息是通过 upcall 在上层拿到的. 大部分信息是保存在对应的 vxlan port 的 cfg 上
     struct flow_tnl tunnel;     /* Encapsulating tunnel parameters. */
     ovs_be64 metadata;          /* OpenFlow Metadata. */
-    uint32_t regs[FLOW_N_REGS]; /* Registers. */
+    uint32_t regs[FLOW_N_REGS]; /* Registers. */	// 支持 reg 的实现
     uint32_t skb_priority;      /* Packet priority for QoS. */	// ref:xlate_set_queue_action() -> dpif_netdev_queue_to_priority()
     uint32_t pkt_mark;          /* Packet mark. */
     uint32_t dp_hash;           /* Datapath computed hash value. The exact
                                  * computation is opaque to the user space. */
     union flow_in_port in_port; /* Input port.*/
+
+    /* 在 upcall 的时候, 有时候上层无法一次性翻译完所有的 action, 就会将当前的翻译的 ctx 保存起来, 得到一个 recirc id
+     * 同时向 action 里插入一个 OVS_ACTION_ATTR_RECIRC, 参数就是 recirc id
+     *
+     * 当 pkt 碰到 OVS_ACTION_ATTR_RECIRC 的时候就会设置这个 recirc id, 然后重新进入 datapath 处理. 这一次由于设置了 recirc id
+     * 了, 所以也要参与 flow 匹配. 如果匹配失败, 那么就继续 upcall, 这时候 上层处理的时候机会从 flow 里提取出这里的 recirc id
+     * 然后恢复之前翻译的 ctx, 继续翻译. 然后 install 新的 flow
+     * */
     uint32_t recirc_id;         /* Must be exact match. */ // ref: recirc_id_node_find(), OVS_ACTION_ATTR_RECIRC
     uint8_t ct_state;           /* Connection tracking state. */
     uint8_t ct_nw_proto;        /* CT orig tuple IP protocol. */

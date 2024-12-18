@@ -312,6 +312,7 @@ struct ofpact_output {
 /* OFPACT_CONTROLLER.
  *
  * Used for NXAST_CONTROLLER. */
+// ref: openflow spec controller action
 struct ofpact_controller {
     OFPACT_PADDED_MEMBERS(
         struct ofpact ofpact;
@@ -550,7 +551,7 @@ struct ofpact_set_field {
     OFPACT_PADDED_MEMBERS(
         struct ofpact ofpact;
         bool flow_has_vlan;   /* VLAN present at action validation time. */
-        const struct mf_field *field;
+        const struct mf_field *field;	// 用 value 去设置 field
     );
     union mf_value value[];  /* Significant value bytes followed by
                               * significant mask bytes. */
@@ -712,7 +713,7 @@ struct ofpact_conntrack {
         uint16_t alg;
         uint8_t recirc_table;
     );
-    struct ofpact actions[0];
+    struct ofpact actions[0];	// ref man ovs-action, ct() action 支持少量的 action exec
 };
 BUILD_ASSERT_DECL(offsetof(struct ofpact_conntrack, actions)
                   % OFPACT_ALIGNTO == 0);
@@ -959,6 +960,13 @@ enum nx_mp_algorithm {
 /* OFPACT_CONJUNCTION.
  *
  * Used for NXAST_CONJUNCTION. */
+/* conjunction action example
+ *
+ * ovs-ofctl add-flow br0 "table=0, priority=100, vlan_vid=10, actions=conjunction(1,1/2)"
+ * ovs-ofctl add-flow br0 "table=0, priority=100, ip,nw_src=192.168.1.1, actions=conjunction(1,2/2)"
+ * ovs-ofctl add-flow br0 "table=0, priority=100, conj_id=1, actions=output:1" # 匹配这条 rule 后, 然后利用 conj_id 去 匹配一条又一条action 的
+ *
+ * */
 struct ofpact_conjunction {
     OFPACT_PADDED_MEMBERS(
         struct ofpact ofpact;

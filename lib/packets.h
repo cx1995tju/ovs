@@ -111,6 +111,13 @@ flow_tnl_equal(const struct flow_tnl *a, const struct flow_tnl *b)
  * */
 struct pkt_metadata {
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
+    /* 在 upcall 的时候, 有时候上层无法一次性翻译完所有的 action, 就会将当前的翻译的 ctx 保存起来, 得到一个 recirc id
+     * 同时向 action 里插入一个 OVS_ACTION_ATTR_RECIRC, 参数就是 recirc id
+     *
+     * 当 pkt 碰到 OVS_ACTION_ATTR_RECIRC 的时候就会设置这个 recirc id, 然后重新进入 datapath 处理. 这一次由于设置了 recirc id
+     * 了, 所以也要参与 flow 匹配. 如果匹配失败, 那么就继续 upcall, 这时候 上层处理的时候机会从 flow 里提取出这里的 recirc id
+     * 然后恢复之前翻译的 ctx, 继续翻译. 然后 install 新的 flow
+     * */
     uint32_t recirc_id;         /* Recirculation id carried with the
                                    recirculating packets. 0 for packets
                                    received from the wire. */

@@ -8017,6 +8017,8 @@ ofpact_is_allowed_in_actions_set(const struct ofpact *a)
  *   duplicates are removed by do_xlate_actions().
  *   This has an unwanted side-effect of compsoting multiple
  *   LOAD_REG actions that touch different regions of the same field. */
+
+// action set 的执行, 注意 action set 中 action 不能重复, 而且执行是有与定义的顺序的, 另外 action 的种类也是受到限制的
 void
 ofpacts_execute_action_set(struct ofpbuf *action_list,
                            const struct ofpbuf *action_set)

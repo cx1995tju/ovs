@@ -217,6 +217,7 @@ struct ofputil_tlv_table_mod;
  * writing, e.g. <1>, to consider that line only for e.g. MFF_REG1.
  */
 
+ // man ovs-fields
 enum OVS_PACKED_ENUM mf_field_id {
 /* ## -------- ## */
 /* ## Metadata ## */

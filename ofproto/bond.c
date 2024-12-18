@@ -335,6 +335,8 @@ add_pr_rule(struct bond *bond, const struct match *match,
  * calling this function avoid acquiring lock only to satisfy
  * lock annotation. Currently, only 'bond_unref()' calls
  * this function directly.  */
+/* ref: comments on ofproto/bond.h:bond_update_post_recirc_rules()
+ * */
 static void
 update_recirc_rules__(struct bond *bond)
 {
@@ -355,7 +357,7 @@ update_recirc_rules__(struct bond *bond)
              * lb_output action with bond buckets.
              */
             return;
-        } else {
+        } else { // 如果是这条路径, 会给 datapath flow 安装一堆 flow 用来实现 hash 选路的
             for (i = 0; i < BOND_BUCKETS; i++) {
                 struct bond_member *member = bond->hash[i].member;
 

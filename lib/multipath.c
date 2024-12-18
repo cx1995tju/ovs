@@ -52,12 +52,14 @@ multipath_execute(const struct ofpact_multipath *mp, struct flow *flow,
                   struct flow_wildcards *wc)
 {
     /* Calculate value to store. */
-    uint32_t hash = flow_hash_fields(flow, mp->fields, mp->basis);
+    uint32_t hash = flow_hash_fields(flow, mp->fields, mp->basis); // 根据 fields 的指示做 hash
     uint16_t link = multipath_algorithm(hash, mp->algorithm,
-                                        mp->max_link + 1, mp->arg);
+                                        mp->max_link + 1, mp->arg);	// 根据 hash 以及 提供的 算法 选择 link
 
+    // hash 后, 将链路结果存储到 flow 里
+    // 用来做 hash 的 field 在数据路径处理的时候 wildcards 肯定要将其 提取出来, 所以根据 fields 来设置 wildcard
     flow_mask_hash_fields(flow, wc, mp->fields);
-    nxm_reg_load(&mp->dst, link, flow, wc);
+    nxm_reg_load(&mp->dst, link, flow, wc); // 将 link 存储到 mp->dst 指示的 field
 }
 
 static uint16_t

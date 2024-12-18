@@ -8062,7 +8062,7 @@ dp_execute_output_action(struct dp_netdev_pmd_thread *pmd,
         return false;
     }
     if (!should_steal) {
-        dp_packet_batch_clone(&out, packets_); // 有趣, packet 还要还回去的, 所以你要 output 也只能 clone 一份的
+        dp_packet_batch_clone(&out, packets_); // 有趣, packet 还要还回去的, 所以你要 output 也只能 clone 一份的. 必须是 clone 一份. openflow 的 output action 就是这么定义的.
         dp_packet_batch_reset_cutlen(packets_);
         packets_ = &out;
     }
@@ -8289,7 +8289,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
             struct dp_packet *packet;
             DP_PACKET_BATCH_FOR_EACH (i, packet, packets_) {
-                packet->md.recirc_id = nl_attr_get_u32(a);
+                packet->md.recirc_id = nl_attr_get_u32(a);	// 修改了 recirc_id 了, 后续如果匹配不上就会 upcall, 然后用这个 找到一个 freeze ctx, 继续之前的 action 翻译
             }
 
             (*depth)++;

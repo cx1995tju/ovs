@@ -8649,7 +8649,13 @@ commit_encap_decap_action(const struct flow *flow,
  * ODP action to modify any ARP field, so such a modification triggers
  * SLOW_ACTION.  (When this happens, packets that need such modification get
  * flushed to userspace and handled there, which works OK but much more slowly
- * than if the datapath handled it directly.) */
+ * than if the datapath handled it directly.)
+ *
+ * 通过 比较 flow 和 base 的区别, 知道前面的翻译过程中, 哪些字段需要修改. 这样这里将其转换为 datapath 的 action
+ * 提交到 odp_actions 里
+ *
+ * 然后 更新 base 得到新的 base, 后续 commit 的时候才不会重复
+ * */
 enum slow_path_reason
 commit_odp_actions(const struct flow *flow, struct flow *base,
                    struct ofpbuf *odp_actions, struct flow_wildcards *wc,

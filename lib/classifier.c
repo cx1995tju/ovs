@@ -872,6 +872,7 @@ find_conjunctive_match__(struct hmap *matches, uint64_t id, uint32_t hash)
     return NULL;
 }
 
+// openflow conjunction 的体现
 static bool
 find_conjunctive_match(const struct cls_conjunction_set *set,
                        unsigned int max_n_clauses, struct hmap *matches,
