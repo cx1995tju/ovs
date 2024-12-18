@@ -7329,7 +7329,11 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
             }
             break;
 
-        case OFPACT_NAT: // 所以 openflow 层面的 ct(nat) 在 ovs 的 openflow 组织的时候会被组织为 NAT + CT action 咯
+	case OFPACT_NAT: // 所以 openflow 层面的 ct(nat) , 处理 ct 的时候会有一些 exec 以及 nat 参数, 会递归调用 do_xlate_actions() 的. nat 这个虽然在 openflow spec 里不是一个 action, 但是 ovs 里组织 openflow 的时候, 将其处理为了一个 action
+			 // ref:
+			 //     - compose_conntrack_action() -> put_ct_nat()
+			 //     - decode_NXAST_RAW_CT()
+			 //     - format_NAT()
             /* This will be processed by compose_conntrack_action(). */
             ctx->ct_nat_action = ofpact_get_NAT(a);
             break;

@@ -8639,7 +8639,7 @@ commit_encap_decap_action(const struct flow *flow,
  * 'base' and 'flow', appends ODP actions to 'odp_actions' that change the flow
  * key from 'base' into 'flow', and then changes 'base' the same way.  Does not
  * commit set_tunnel actions.  Users should call commit_odp_tunnel_action()
- * in addition to this function if needed.  Sets fields in 'wc' that are
+ * in addition to this function if needed.  Sets fields in 'wc' that are	// 对应 bit 设置为 1
  * used as part of the action.
  *
  * In the common case, this function returns 0.  If the flow key modification
