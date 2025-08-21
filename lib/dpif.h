@@ -72,6 +72,7 @@
  * on systems where port membership can only be changed by some external
  * entity.
  *
+ *	// 每个 datapath 有一个 local port，其 odp port number为 0, 名字是 ovs-netdev / ovs-system
  * Each datapath must have a port, sometimes called the "local port", whose
  * name is the same as the datapath itself, with port number 0.  The local port
  * cannot be deleted.

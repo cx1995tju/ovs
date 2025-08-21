@@ -692,7 +692,7 @@ udpif_set_threads(struct udpif *udpif, uint32_t n_handlers_,
                      dpif_name(udpif->dpif), ovs_strerror(error));
             return;
         }
-        udpif_start_threads(udpif, n_handlers_requested, //启动revalidators线程，ovs-dpdk场景下，这些线程一直阻塞没有作用
+        udpif_start_threads(udpif, n_handlers_requested, //启动revalidators线程和 handler 线程，ovs-dpdk场景下，handler 线程一直阻塞没有作用
                             n_revalidators_requested);
     }
 }
@@ -2244,6 +2244,7 @@ populate_xcache(struct udpif *udpif, struct udpif_key *ukey,
     return 0;
 }
 
+// 这里会进行地址翻译，如果涉及到 tunnel port, 可能会发送 arp 报文，来更新 arp 表
 static enum reval_result
 revalidate_ukey__(struct udpif *udpif, const struct udpif_key *ukey,
                   uint16_t tcp_flags, struct ofpbuf *odp_actions,
