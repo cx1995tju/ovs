@@ -180,7 +180,7 @@ struct dpcls {
 /* Data structure to keep packet order till fastpath processing. */
 struct dp_packet_flow_map {	// 记录 packet 和 flow 的对应关系
     struct dp_packet *packet;
-    struct dp_netdev_flow *flow;
+    struct dp_netdev_flow *flow; // flow 为 null，则表示 packet 是 miss 的
     uint16_t tcp_flags;
 };
 
@@ -3237,6 +3237,7 @@ dp_netdev_pmd_lookup_flow(struct dp_netdev_pmd_thread *pmd,
     return netdev_flow;
 }
 
+// 和 dp_netdev_pmd_lookup_flow() 提供的参数不同，这里提供的是 openflwow 层的参数。包括 upcall flow id。nlattr 格式的 key
 static struct dp_netdev_flow *
 dp_netdev_pmd_find_flow(const struct dp_netdev_pmd_thread *pmd,
                         const ovs_u128 *ufidp, const struct nlattr *key,
@@ -6314,7 +6315,7 @@ reload: //后面的for循环，可能被跳出，然后goto reload，重新加�
             coverage_try_clear();
             dp_netdev_pmd_try_optimize(pmd, poll_list, poll_cnt);
             if (!ovsrcu_try_quiesce()) {
-                emc_cache_slow_sweep(&((pmd->flow_cache).emc_cache));
+                emc_cache_slow_sweep(&((pmd->flow_cache).emc_cache)); // 周期性清理 emc
                 pmd->next_rcu_quiesce =
                     pmd->ctx.now + PMD_RCU_QUIESCE_INTERVAL;
             }
@@ -7303,10 +7304,9 @@ smc_lookup_batch(struct dp_netdev_pmd_thread *pmd,
             CMAP_NODE_FOR_EACH (flow, node, flow_node) { // 具有相同 hash 值的 flow 都在这个 flow_node 上
                 /* Since we dont have per-port megaflow to check the port
                  * number, we need to  verify that the input ports match. */
-		    // 因为 smc 并不是一层 flow, 而仅仅是一个 megaflow 的 cache 层, 用来优化 megaflow 的查找的, 所以要和 megaflow 匹配校验下. 
-		    // 因为是 cache 层, 可能是冲突的, 所以要比较下. 考虑下: 组相连 cache 的特性
+		    // 因为 smc 并不是emc 那种精确匹配，而是基于 hash 值的。默认是 4 路组相连的，所以要用数据面带 mask 的 key 来匹配
                 if (OVS_LIKELY(dpcls_rule_matches_key(&flow->cr, &keys[i]) &&	// 这个 key 和 flow->cr 这个 megaflow 可以匹配上
-                flow->flow.in_port.odp_port == packet->md.in_port.odp_port)) { // 找到了 flow
+					flow->flow.in_port.odp_port == packet->md.in_port.odp_port)) { // 找到了 flow
                     tcp_flags = miniflow_get_tcp_flags(&keys[i].mf);
 
                     /* SMC hit and emc miss, we insert into EMC */
@@ -7423,7 +7423,7 @@ dp_netdev_hw_flow(const struct dp_netdev_pmd_thread *pmd,
 // 最终报文被分成三部分:
 // - batches: 组织成 per-flow 的 后续通过快速路径处理的报文
 // - packets_: flow miss 的，后续需要慢速路径处理的报文
-// - flow_map: 找到了 flow (emc 或者 smc 里找到的)，但是为了避免 reorder，需要在特殊处理的报文。 注意 packets_ 中的报文也需要消耗掉一个 flow_map 的 entry, 这是为了保序
+// - flow_map: 找到了 flow (emc 或者 smc 里找到的)，但是为了避免 reorder，需要再特殊处理的报文。 注意 packets_ 中的报文也需要消耗掉一个 flow_map 的 entry, 这是为了保序
 //
 //
 // @IN
@@ -7438,7 +7438,7 @@ dp_netdev_hw_flow(const struct dp_netdev_pmd_thread *pmd,
 //    @batches: 在 packets_ 中前面那些一直 emc hit 的报文按照 flow 分门别类保存在这里
 //    @n_batches: 指示 batches 的大小
 //
-//    @flow_map: 其中的元素有两种:
+//    @flow_map: 其中的元素有两种: 组织报文的，也是按照 flow 粒度组织的。而且是按照报文顺序来组织的
 //        - 一种是 emc(或 smc) hit 了, 但是没有保存在 batches 中的 pkt 会占据一个 flow_map 的元素, 保存了对应的 pkt 和 flow
 //        - 另一种是 emc / smc 都 miss 了的 pkts, 会按照 packets_ 的报文顺序在 flow_map 中将对应的位置保留下来
 //        - 注: 这个结构主要是为了防止 pkt reorder 了, 保序用的
@@ -7483,14 +7483,15 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             continue;
         }
 
-        if (i != cnt - 1) { // 不是最后一个报文, 那么预取下下一个报文以及其 metadata
+        if (i != cnt - 1) { // 不是最后一个报文, 那么预取下下一个报文以及其 metadata. 性能优化，prefetch
             struct dp_packet **packets = packets_->packets;
             /* Prefetch next packet data and metadata. */
             OVS_PREFETCH(dp_packet_data(packets[i+1]));
             pkt_metadata_prefetch_init(&packets[i+1]->md);
         }
 
-        if (!md_is_valid) {
+	// pkt 刚从 port 收上来的时候，这里都是 invalid 的。只有 pkt 是被 recirculated 过来的时候，这里才是 valid 的
+        if (!md_is_valid) { // metadata is valid ?
             pkt_metadata_init(&packet->md, port_no);
         }
 
@@ -7519,6 +7520,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             }
         }
 
+	// hot key: packet 进入到 ovs 数据面之后，都是先从报文里提取 flow 信息, 然后保存为 miniflow 的压缩格式
         miniflow_extract(packet, &key->mf);	// 从报文中 packet 提取 key 信息即 miniflow 保存到 key->mf , 并计算 hash
         key->len = 0; /* Not computed yet. */
         key->hash =
@@ -7528,7 +7530,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 
         /* If EMC is disabled skip emc_lookup, cur_min == 0 的时候 emc 就是被 disable 了 */
         flow = (cur_min != 0) ? emc_lookup(&cache->emc_cache, key) : NULL;	// 用 key 去 emc(micro_flow) 中查找 flow
-        if (OVS_LIKELY(flow)) { // emc 命中了
+        if (OVS_LIKELY(flow)) { // emc 命中了, 将 packet 放到 flow_map 或者 batches 里
             tcp_flags = miniflow_get_tcp_flags(&key->mf);
             n_emc_hit++;
             if (OVS_LIKELY(batch_enable)) {	// 将packet 报文保存到 batches 数组中, 一旦出现一个报文 emc miss 后，这里就是 disable 了。后续的报文就算命中了, 也不会在这里处理的
@@ -7542,7 +7544,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
                 packet_enqueue_to_flow_map(packet, flow, tcp_flags,	// 将 packet 和 flow 的对应关系保存到 flow_map 中
                                            flow_map, map_cnt++);
             }
-        } else {								// emc 中 miss 了, 将 报文移动到 packets_ 数组前面。注意这里直接往前移动，覆盖的。因为前面的报文肯定处理过了。
+        } else { // 没有 hit, 将 packet 还放在 packets_ 里. 但是要往数据前面取移动 // emc 中 miss 了, 将 报文移动到 packets_ 数组前面。注意这里直接往前移动，覆盖的。因为前面的报文肯定处理过了。
             /* Exact match cache missed. Group missed packets together at
              * the beginning of the 'packets' array. */
             dp_packet_batch_refill(packets_, packet, i);
@@ -7559,6 +7561,9 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             missed_keys[n_missed] = key; // emc 和 smc 都 missed 的 key 会用 missed_keys 指示
             key = &keys[++n_missed]; // emc missed 的 key 保存在 keys 里
 
+	    // ref: 9b4f08cdca
+	    // 是为了避免属于同一份 megaflow 但是不同 emc flow 的 pkt 乱序。考虑 tcp flags。两个报文可能属于同一个 5-tuple，但是 flags 不同。导致一个前一个报文没有 hit emc，后一个 hit 了。
+	    // 这样如果没有 flow map 的话，后一个 packet 可能出现在 batches 前面，进而导致乱序。为了避免这个问题，一旦 packets_ 里有一个没有 命中，就使用 flow map 来保存报文了。flow_map 是保序的。
             /* Skip batching for subsequent packets to avoid reordering. */
             batch_enable = false;	// 一旦有一个 报文 miss 了 emc 后，batch_enable 就是 false了
         }
@@ -7575,11 +7580,15 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
         return dp_packet_batch_size(packets_);
     }
 
+    // 到这里，batches 中是 emc hit 而且按照 perf-flow 分类号的报文
+    // flow_map 是 emc hit. 但是在它前面的报文发生过 miss。所以其不能放到 batches 里。否则 batches 里走了快速路径就可能 reorder 了。 
+
     /* Packets miss EMC will do a batch lookup in SMC if enabled */
     // 去 smc 里尝试查找一次, 找到了就将 flow_map 中对应位置填充起来
     smc_lookup_batch(pmd, keys, missed_keys, packets_,
                      n_missed, flow_map, index_map);
 
+    // 返回哪些 emc 和 smc 都 miss 的报文个数, 这些报文已经被放置到 packets_ 数组的前面了
     return dp_packet_batch_size(packets_);
 }
 
@@ -7599,7 +7608,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
     odp_port_t orig_in_port = packet->md.orig_in_port;
 
     match.tun_md.valid = false;
-    miniflow_expand(&key->mf, &match.flow);	// miniflow 扩充为 openflow 的可以了
+    miniflow_expand(&key->mf, &match.flow);	// 解压 miniflow
     memset(&match.wc, 0, sizeof match.wc); // match 的填充来自于 openflow
 
     ofpbuf_clear(actions);
@@ -7842,6 +7851,7 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
 
     /* Batch rest of packets which are in flow map. */
     // fast_path_processing 中 megaflow 命中的报文，最终也加到了 flow_map 中了
+    // 然后将 flow_map 中的报文按照 flow 分类到 batches 中
     for (i = 0; i < n_flows; i++) { // 为了避免 reorder，flow_map 中有一部分报文已经在 fast_path_processing 中被处理了。剩下的都是 emc hit，而且不会导致 flow packet reorder 的报文了
         struct dp_packet_flow_map *map = &flow_map[i];
 

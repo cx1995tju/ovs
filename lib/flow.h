@@ -525,6 +525,7 @@ flowmap_next_index(struct flowmap_aux *aux, size_t *idx)
 //
 // 注意: miniflow 虽然是 flow 结构的压缩表示, 但是构造这个结构的时候是直接从 packet 里提取信息构造的
 // 而 struct flow 结构, 则是 flow miss 后 handle_packet_upcall() 的时候, 调用 dp_netdev_flow_add() 创建的
+// ref: netdev_flow_key
 struct miniflow {
     struct flowmap map; // 一个 bitmap 咯
     /* Followed by:

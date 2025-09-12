@@ -289,7 +289,7 @@ struct dpif_class {
 
     /* Deletes all flows from 'dpif' and clears all of its queues of received
      * packets. */
-    int (*flow_flush)(struct dpif *dpif);
+    int (*flow_flush)(struct dpif *dpif); // 所以数据面的 flow 也是由上层调用各种接口来控制的。
 
     /* Flow dumping interface.
      *
@@ -329,6 +329,7 @@ struct dpif_class {
      * be submitted to to a netdev (only offload) or to the kernel datapath
      * (never offload) or to both (offload if possible; software fallback). */
     // 需要 dpif provider 帮助做些什么的时候就会调用这个函数
+    // 这里涉及了数据面 flow 的相关操作，ref: dpif_operate
     void (*operate)(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
                     enum dpif_offload_type offload_type);
 

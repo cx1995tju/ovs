@@ -91,13 +91,23 @@ struct dp_netdev_flow_attrs {
  *
  *
  * 注: 可以不精确的将其看作 megaflow, 因为 megaflow 就是数据面最大的 flow 了, 而这个就是数据面用的最大的 flow
+ *
+ *  ======准确的说，这个就是数据面使用的 flow。什么 megaflow， smc，emc 都是这个 flow 的缓存。=============
+ *  更重要的是 action 是存在这里的
+ *
+ *  flow = fields + actions + mask
+ *
+ *  fields + mask: 是 struct dpcls_rule cr 这个成员
+ *  actions: 是 struct dp_netdev_actions * actions 这个成员
+ *
+ *  查找 flow 的是使用的 key 则是 ~netdev_flow_key~
  * */
 struct dp_netdev_flow {
     // miss 的时候将 pkt upcall 到 openflow 层, 这时候匹配的到 openflow 是通配的, 后续创建的 megaflow 也是通配的
-    const struct flow flow;      /* Unmasked flow that created this entry. */ // flow key, 保存到dp_netdev_pmd_thread.flow_table
+    const struct flow flow;      /* Unmasked flow that created this entry. */
     /* Hash table index by unmasked flow. */
     const struct cmap_node node; /* In owning dp_netdev_pmd_thread's */
-                                 /* 'flow_table'. */
+                                 /* 'flow_table'. */ // 挂到 pmd 的 flow_table 结构上
     const struct cmap_node mark_node; /* In owning flow_mark's mark_to_flow */
     const ovs_u128 ufid;         /* Unique flow identifier. */ // 和 mega_ufid 类似, 算出的 一个 uuid 
     const ovs_u128 mega_ufid;    /* Unique mega flow identifier. */ // 其实没有办法 100% 确保, 不过是使用足够大的 uuid 罢了 ref: %dp_netdev_get_mega_ufid()
@@ -122,7 +132,7 @@ struct dp_netdev_flow {
     struct dp_netdev_flow_attrs last_attrs;
 
     /* Actions. */
-    OVSRCU_TYPE(struct dp_netdev_actions *) actions;
+    OVSRCU_TYPE(struct dp_netdev_actions *) actions; // emc / smc / megaflow 都没有直接保存 action 的，都是要通过索引到这里来找到 action 的. 这里的 action 是通过 openflow 翻译得到的
 
     /* While processing a group of input packets, the datapath uses the next
      * member to store a pointer to the output batch for the flow.  It is
@@ -133,6 +143,7 @@ struct dp_netdev_flow {
     /* Packet classification. */
     char *dp_extra_info;         /* String to return in a flow dump/get. */
     // 不同的
+    // key 和 mask 都在这里保存的
     struct dpcls_rule cr;        /* In owning dp_netdev's 'cls'. */	// megaflow, 创建 dp_netdev_flow 的时候是基于 openflow 的信息的, 那么当然可以有一个 mask 信息咯, 保存到: dp_netdev_pmd_thread.classifiers 里
     /* 'cr' must be the last member. */
 };

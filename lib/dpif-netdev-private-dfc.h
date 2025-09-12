@@ -90,29 +90,32 @@ struct dp_netdev_pmd_thread;
 struct dpcls_rule;
 
 struct emc_entry {
-    struct dp_netdev_flow *flow;
+    struct dp_netdev_flow *flow; // 指向其关联的数据面的 flow
     struct netdev_flow_key key;   /* key.hash used for emc hash value. */
 };
 
 // emc flow 表
+// entries 是一个 hash 表，采样 hash 移位来避免冲突
+// ref: EMC_FOR_EACH_POS_WITH_HASH
 struct emc_cache {
-    struct emc_entry entries[EM_FLOW_HASH_ENTRIES];
+    struct emc_entry entries[EM_FLOW_HASH_ENTRIES]; // 每个 pmd 的 这个 cache 大小是固定的
     int sweep_idx;                /* For emc_cache_slow_sweep(). */
 };
 
 // 一个 bucket 存储哪些 netdev_flow_key.hash % SMC_BUCKET_CNT 相同的 flow
 // 在 bucket 里的 SMC_ENTRY_PER_BUCKET 个 flow sig 都是不同的
+// 每个 桶 4 个 entry
 struct smc_bucket {
-    uint16_t sig[SMC_ENTRY_PER_BUCKET];
-    uint16_t flow_idx[SMC_ENTRY_PER_BUCKET];
+    uint16_t sig[SMC_ENTRY_PER_BUCKET]; // 这个是 key
+    uint16_t flow_idx[SMC_ENTRY_PER_BUCKET]; // 这个是 value, 指向 dp_netdev_pmd_thread.flow_table 里的位置. flow_table 
 };
 
 /* Signature match cache, differentiate from EMC cache */
-// - 注意: smc 并不能算作一层 flow, 而仅仅是为了优化 megaflow 的查找做的一层 megaflow 的 cache 层
+// emc 是精确匹配的，smc 则是按照报文 hash 值保存的一个桶。 
 // 根据 netdev_flow_key.hash % SMC_BUCKET_CNT 作为 index 找到对应的 bucket, ref: smc_insert
 // 然后将 flow 的 hash 的 [31:16]b 作为 sig 将其在 dp_netdev_pmd_thread.flow_table 中的位置保存到 flow_idx 中
 struct smc_cache {
-    struct smc_bucket buckets[SMC_BUCKET_CNT]; // 256K 大小 ???
+    struct smc_bucket buckets[SMC_BUCKET_CNT]; // 256K 个桶 ???
 };
 
 // emc 插入: emc_insert()
@@ -132,7 +135,7 @@ struct dfc_cache {
     for (uint32_t i__ = 0, srch_hash__ = (HASH);                             \
          (CURRENT_ENTRY) = &(EMC)->entries[srch_hash__ & EM_FLOW_HASH_MASK], \
          i__ < EM_FLOW_HASH_SEGS;                                            \
-         i__++, srch_hash__ >>= EM_FLOW_HASH_SHIFT)
+         i__++, srch_hash__ >>= EM_FLOW_HASH_SHIFT) // 这里是避免冲突的操作
 
 void dfc_cache_init(struct dfc_cache *flow_cache);
 
@@ -142,6 +145,8 @@ void dfc_cache_uninit(struct dfc_cache *flow_cache);
  * invocation).  */
 void emc_cache_slow_sweep(struct emc_cache *flow_cache);
 
+// 什么时候 ce->flow 会被置为 NULL 呢 ??? ref: emc_clear_entry()
+// 什么时候 flow 会被置为 dead 呢 ??? dp_netdev_pmd_remove_flow
 static inline bool
 emc_entry_alive(struct emc_entry *ce)
 {
@@ -158,6 +163,9 @@ emc_flow_key_equal_mf(const struct netdev_flow_key *key,
     return !memcmp(&key->mf, mf, key->len);
 }
 
+// key 可以从 packet 里提取的
+// cache 是 per-pmd 结构，从 pmd 里获取
+// 如果命中了，直接返回数据面使用的 flow, dp_netdev_flow, 其中包含有 action
 static inline struct dp_netdev_flow *
 emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key)
 {

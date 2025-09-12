@@ -100,7 +100,7 @@ struct dp_netdev_pmd_thread {
      */
     struct ovs_mutex flow_mutex;
     // concurrent hash map
-    struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd, 保存的是 dp_netdev_flow 结构
+    struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd, 保存的是 dp_netdev_flow 结构. 一个 cmap node 节点保存的都是相同 hash 值的 flow。
 
     /* One classifier per in_port polled by the pmd */
     // 每个 in_port 有一个 megaflow 的表

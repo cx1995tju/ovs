@@ -1155,6 +1155,15 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
  * since the 'upcall->put_actions' remains uninitialized. */
 
 /*  @backer: ref: all_dpif_backers 'ovs-netdev'
+ *
+ *  IN:
+ *     - @type: upcall reason
+ *     - @userdata: upcall 附带的信息， 当 reason 是 DPIF_UC_ACTION 的时候会携带一些数据
+ *     - @flow: key
+ *
+ *  OUT:
+ *     - @upcall: 核心就是要构造这个结构 upcall_ctx
+ *     - @ufid: unique flow id
  */
 static int
 upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
@@ -1366,13 +1375,13 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
 /* IN:
  *    @packet: 待处理的一个 packet
  *    @flow: 从 packet 中提取的 key
- *    @ufid: unique flow id
  *    @pmd_id: 调用该函数的 pmd core_id
  *    @type: upcall 的理由, 比如: DPIF_UC_MISS, DPIF_UC_ACTION
  *    @userdata: 当 upcall 的理由是 DPIF_UC_ACTION 的时候会携带一些数据
  *    @aux: struct udpif, ref: udpif_create()
  *
  * OUT:
+ *    @ufid: unique flow id
  *    @wc:
  *    @actions:
  *    @put_actions:
@@ -1399,7 +1408,7 @@ upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufi
         return error;
     }
 
-    upcall.fitness = ODP_FIT_PERFECT;
+    upcall.fitness = ODP_FIT_PERFECT; // 前面构造了 upcall ctx 了，现在这里的关键就是要翻译了，然后得到 actions 和 wc
     error = process_upcall(udpif, &upcall, actions, wc);
     if (error) {
         goto out;

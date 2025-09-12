@@ -760,7 +760,8 @@ dump_invalid_packet(struct dp_packet *packet, const char *reason)
  *      present and the packet has at least the content used for the fields
  *      of interest for the flow, otherwise UINT16_MAX.
  */
-// 利用 packet 和 packet->md 中的信息来填充 dst
+// 利用 packet 和 packet->md 中的信息来填充 dst, miniflow 是 flow 的压缩版本
+// 重要函数，是数据面的热点，packet 进入数据面后首先要做的事情就是提取 flow
 void
 miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 {

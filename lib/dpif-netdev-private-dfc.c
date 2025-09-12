@@ -104,7 +104,7 @@ emc_cache_slow_sweep(struct emc_cache *flow_cache)
     struct emc_entry *entry = &flow_cache->entries[flow_cache->sweep_idx];
 
     if (!emc_entry_alive(entry)) {
-        emc_clear_entry(entry);
+        emc_clear_entry(entry); // emc 关联的 flow 被置为 dead 了, 那么就清理掉 emc 指向的 flow
     }
     flow_cache->sweep_idx = (flow_cache->sweep_idx + 1) & EM_FLOW_HASH_MASK;
 }
