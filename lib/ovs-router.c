@@ -132,6 +132,7 @@ ovs_router_lookup(uint32_t mark, const struct in6_addr *ip6_dst,
 
         ovs_strlcpy(output_bridge, p->output_bridge, IFNAMSIZ);
         *gw = p->gw;
+	// src 没有设置的时候, 就会查路由的同时来设置 src
         if (src && !ipv6_addr_is_set(src)) {
             *src = p->src_addr;
         }
