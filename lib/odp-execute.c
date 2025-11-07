@@ -681,6 +681,7 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
     struct dp_packet_batch pb;
     size_t left;
 
+    // 按概率采样后去执行 subaction, 当然如果没有采样到, 那么直接 return 走.
     NL_NESTED_FOR_EACH_UNSAFE (a, left, action) {
         int type = nl_attr_type(a);
 
@@ -767,7 +768,7 @@ odp_execute_check_pkt_len(void *dp, struct dp_packet *packet, bool steal,
                     - dp_packet_l2_pad_size(packet);
 
     a = attrs[OVS_CHECK_PKT_LEN_ATTR_PKT_LEN];
-    if (size > nl_attr_get_u16(a)) {
+    if (size > nl_attr_get_u16(a)) { // 根据报文的长度做不同的 subaction. 可能会 clone
         a = attrs[OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_GREATER];
     } else {
         a = attrs[OVS_CHECK_PKT_LEN_ATTR_ACTIONS_IF_LESS_EQUAL];
@@ -882,13 +883,13 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
         int type = nl_attr_type(a);
         bool last_action = (left <= NLA_ALIGN(a->nla_len)); // 是不是最后一个 action
 
-        if (requires_datapath_assistance(a)) {
+        if (requires_datapath_assistance(a)) { // 需要 datapath 处理的, 比如: ovs-kernel 和 ovs-dpdk 这里的处理函数就是不同的
             if (dp_execute_action) {
                 /* Allow 'dp_execute_action' to steal the packet data if we do
                  * not need it any more. */
                 bool should_steal = steal && last_action; // 之后是最后一个 last_action 才能 steal 走, 否则必须还回来, 因为还有 action 需要执行的. 但是 dp_execute_action 可能修改 pkt, 也可能 clone pkt 的
 
-                dp_execute_action(dp, batch, a, should_steal); // 我们的重点还是这里, 数据面怎么处理 pkt %dp_execute_cb()
+                dp_execute_action(dp, batch, a, should_steal); // 我们的重点还是这里, 数据面怎么处理 pkt %dp_execute_cb() %dpif_execute_helper_cb()
 
                 if (last_action || dp_packet_batch_is_empty(batch)) {
                     /* We do not need to free the packets.

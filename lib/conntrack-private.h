@@ -98,7 +98,7 @@ struct conn {
     struct conn_key parent_key; /* Only used for orig_tuple support. */
     struct ovs_list exp_node;
     struct cmap_node cm_node;
-    uint16_t nat_action;
+    uint16_t nat_action; // %NAT_ACTION_DST_PORT
     char *alg;
     struct conn *nat_conn; /* The NAT 'conn' context, if there is one. */
 

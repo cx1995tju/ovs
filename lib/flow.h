@@ -278,7 +278,7 @@ typedef unsigned long long map_t;
 #define FLOWMAP_UNITS DIV_ROUND_UP(FLOW_U64S, MAP_T_BITS)
 
 struct flowmap {
-    map_t bits[FLOWMAP_UNITS]; // 每个 元素是 8Byte(64b), 每个 bit 对应 flow 这个结构的 8Byte, 所以一个元素 就能对应 64b * 8B = 512Byte 
+    map_t bits[FLOWMAP_UNITS]; // 每个 元素代表 8Byte(64b), 每个 bit 对应 flow 这个结构的 8Byte, 所以一个元素 就能对应 64b * 8B = 512Byte 
 };
 
 #define FLOWMAP_EMPTY_INITIALIZER { { 0 } }
@@ -527,7 +527,7 @@ flowmap_next_index(struct flowmap_aux *aux, size_t *idx)
 // 而 struct flow 结构, 则是 flow miss 后 handle_packet_upcall() 的时候, 调用 dp_netdev_flow_add() 创建的
 // ref: netdev_flow_key
 struct miniflow {
-    struct flowmap map; // 一个 bitmap 咯
+    struct flowmap map; // 一个 bitmap 咯, 每个 bit 对应 flow 结构里的一个 u64, 如果这个 bit 是 1, 那么在后面的 values 数组里就对应记录下其值
     /* Followed by:
      *     uint64_t values[n];
      * where 'n' is miniflow_n_values(miniflow). */

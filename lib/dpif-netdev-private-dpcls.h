@@ -42,7 +42,7 @@ struct netdev_flow_key {
     uint32_t hash;       /* Hash function differs for different users. */
     uint32_t len;        /* Length of the following miniflow (incl. map). */
     struct miniflow mf;	// 节省 flow 的空间, 是 struct flow 的压缩
-    uint64_t buf[FLOW_MAX_PACKET_U64S];
+    uint64_t buf[FLOW_MAX_PACKET_U64S]; // ref: miniflow 定义, 这里就是 miniflow 的 values 部分
 };
 
 /* A rule to be inserted to the classifier. */

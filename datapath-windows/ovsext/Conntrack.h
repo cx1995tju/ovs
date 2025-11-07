@@ -74,10 +74,10 @@ typedef struct MD_LABELS {
 typedef enum _NAT_ACTION {
     NAT_ACTION_NONE = 0,
     NAT_ACTION_REVERSE = 1 << 0,
-    NAT_ACTION_SRC = 1 << 1,
-    NAT_ACTION_SRC_PORT = 1 << 2,
-    NAT_ACTION_DST = 1 << 3,
-    NAT_ACTION_DST_PORT = 1 << 4,
+    NAT_ACTION_SRC = 1 << 1,		// 要换 SRC IP
+    NAT_ACTION_SRC_PORT = 1 << 2,       // 要换 SRC PORT
+    NAT_ACTION_DST = 1 << 3,            // 要换 DST IP
+    NAT_ACTION_DST_PORT = 1 << 4,       // 要换 DST PORT
 } NAT_ACTION;
 
 typedef struct _OVS_CT_KEY {

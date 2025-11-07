@@ -7477,12 +7477,14 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
     DP_PACKET_BATCH_REFILL_FOR_EACH (i, cnt, packet, packets_) {
         struct dp_netdev_flow *flow;
 
+	// 非法报文检查
         if (OVS_UNLIKELY(dp_packet_size(packet) < ETH_HEADER_LEN)) {
-            dp_packet_delete(packet); // 非法报文
+            dp_packet_delete(packet);
             COVERAGE_INC(datapath_drop_rx_invalid_packet);
             continue;
         }
 
+	// prefetch 优化
         if (i != cnt - 1) { // 不是最后一个报文, 那么预取下下一个报文以及其 metadata. 性能优化，prefetch
             struct dp_packet **packets = packets_->packets;
             /* Prefetch next packet data and metadata. */
@@ -7490,7 +7492,9 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
             pkt_metadata_prefetch_init(&packets[i+1]->md);
         }
 
-	// pkt 刚从 port 收上来的时候，这里都是 invalid 的。只有 pkt 是被 recirculated 过来的时候，这里才是 valid 的
+	/* XXX: metadata 提取 (做准备)
+	 * pkt 刚从 port 收上来的时候，这里都是 invalid 的。只有 pkt 是被
+	 * recirculated 过来的时候，这里才是 valid 的 */
         if (!md_is_valid) { // metadata is valid ?
             pkt_metadata_init(&packet->md, port_no);
         }
@@ -7502,6 +7506,7 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
                  */
                 continue;
             }
+
             if (OVS_LIKELY(flow)) {	// 通过 mark 找到 flow 了
                 tcp_flags = parse_tcp_flags(packet);
                 n_phwol_hit++;
@@ -7815,6 +7820,11 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
  * When 'md_is_valid' is true the metadata in 'packets' are already valid.
  * When false the metadata in 'packets' need to be initialized. */
 // port_no 是入口 port
+/* 主要是三部分:
+ * - 从 pkt 里提取信息 (含 metata)
+ * - 用提取到的信息来查找 flow (多级缓存)
+ * - 然后从 flow 里提取 action, 执行 action
+ * */
 static void
 dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
                   struct dp_packet_batch *packets,
@@ -8049,6 +8059,7 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
                              NULL);
     if (!error || error == ENOSPC) {
         dp_packet_batch_init_packet(&b, packet);
+	// upcall 处理完又注入回来 ???
         dp_netdev_execute_actions(pmd, &b, should_steal, flow,
                                   actions->data, actions->size);
     } else if (should_steal) {
@@ -8328,41 +8339,44 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         struct nat_action_info_t *nat_action_info_ref = NULL;
         bool nat_config = false;
 
+	// subtype 是什么 ???
         NL_ATTR_FOR_EACH_UNSAFE (b, left, nl_attr_get(a),
                                  nl_attr_get_size(a)) {
             enum ovs_ct_attr sub_type = nl_attr_type(b);
 
+	    // subtype: CT action 的 参数
+	    // 从 ct action 里提取各种信息, 然后用来调用 conntrack_execute()
             switch(sub_type) {
             case OVS_CT_ATTR_FORCE_COMMIT:
-                force = true;
+                force = true;        // 会 fall through 的, 所以其行为蕴含 COMMIT, force: 如果 connection 已经提交, 那么不做任何操作, 而是检查当前 pkt 是否是 ct 的 original direction, 如果不匹配, 那么删除现在的 ct entry, 创建一个新的 entry 作为 original direction.
                 /* fall through. */
-            case OVS_CT_ATTR_COMMIT:
+            case OVS_CT_ATTR_COMMIT: // connections 需要提交到 ct table. 这样后续同一个 connection 的报文才能命中, 才会被标记为 +est, +rel
                 commit = true;
                 break;
             case OVS_CT_ATTR_ZONE:
-                zone = nl_attr_get_u16(b);
+                zone = nl_attr_get_u16(b); // zone 信息
                 break;
             case OVS_CT_ATTR_HELPER:
                 helper = nl_attr_get_string(b);
                 break;
             case OVS_CT_ATTR_MARK:
-                setmark = nl_attr_get(b);
+                setmark = nl_attr_get(b);  // mark 信息
                 break;
             case OVS_CT_ATTR_LABELS:
-                setlabel = nl_attr_get(b);
+                setlabel = nl_attr_get(b); // label 信息
                 break;
             case OVS_CT_ATTR_EVENTMASK:
                 /* Silently ignored, as userspace datapath does not generate
                  * netlink events. */
                 break;
-            case OVS_CT_ATTR_TIMEOUT:
+            case OVS_CT_ATTR_TIMEOUT:      // timeout 信息
                 if (!str_to_uint(nl_attr_get_string(b), 10, &tp_id)) {
                     VLOG_WARN("Invalid Timeout Policy ID: %s.",
                               nl_attr_get_string(b));
                     tp_id = DEFAULT_TP_ID;
                 }
                 break;
-            case OVS_CT_ATTR_NAT: {
+            case OVS_CT_ATTR_NAT: { // 从 b 里进一步提取 nest 的信息, 用来后续做 NAT
                 const struct nlattr *b_nest;
                 unsigned int left_nest;
                 bool ip_min_specified = false;
@@ -8376,31 +8390,31 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                     enum ovs_nat_attr sub_type_nest = nl_attr_type(b_nest);
 
                     switch (sub_type_nest) {
-                    case OVS_NAT_ATTR_SRC:
-                    case OVS_NAT_ATTR_DST:
+                    case OVS_NAT_ATTR_SRC: // SNAT
+                    case OVS_NAT_ATTR_DST: // DNAT
                         nat_config = true;
                         nat_action_info.nat_action |=
                             ((sub_type_nest == OVS_NAT_ATTR_SRC)
                                 ? NAT_ACTION_SRC : NAT_ACTION_DST);
                         break;
-                    case OVS_NAT_ATTR_IP_MIN:
+                    case OVS_NAT_ATTR_IP_MIN: // 最小 ip 地址
                         memcpy(&nat_action_info.min_addr,
                                nl_attr_get(b_nest),
                                nl_attr_get_size(b_nest));
                         ip_min_specified = true;
                         break;
-                    case OVS_NAT_ATTR_IP_MAX:
+                    case OVS_NAT_ATTR_IP_MAX: // 最大 ip 地址
                         memcpy(&nat_action_info.max_addr,
                                nl_attr_get(b_nest),
                                nl_attr_get_size(b_nest));
                         ip_max_specified = true;
                         break;
-                    case OVS_NAT_ATTR_PROTO_MIN:
+                    case OVS_NAT_ATTR_PROTO_MIN: // 最小 port
                         nat_action_info.min_port =
                             nl_attr_get_u16(b_nest);
                         proto_num_min_specified = true;
                         break;
-                    case OVS_NAT_ATTR_PROTO_MAX:
+                    case OVS_NAT_ATTR_PROTO_MAX: // 最大 port
                         nat_action_info.max_port =
                             nl_attr_get_u16(b_nest);
                         proto_num_max_specified = true;
@@ -8415,17 +8429,17 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                     }
                 }
 
-                if (ip_min_specified && !ip_max_specified) {
-                    nat_action_info.max_addr = nat_action_info.min_addr;
+                if (ip_min_specified && !ip_max_specified) { 
+                    nat_action_info.max_addr = nat_action_info.min_addr; // 这样就唯一 ip 了
                 }
                 if (proto_num_min_specified && !proto_num_max_specified) {
-                    nat_action_info.max_port = nat_action_info.min_port;
+                    nat_action_info.max_port = nat_action_info.min_port; // 这样就唯一 port 了
                 }
                 if (proto_num_min_specified || proto_num_max_specified) {
                     if (nat_action_info.nat_action & NAT_ACTION_SRC) {
-                        nat_action_info.nat_action |= NAT_ACTION_SRC_PORT;
+                        nat_action_info.nat_action |= NAT_ACTION_SRC_PORT; // 要换 src port
                     } else if (nat_action_info.nat_action & NAT_ACTION_DST) {
-                        nat_action_info.nat_action |= NAT_ACTION_DST_PORT;
+                        nat_action_info.nat_action |= NAT_ACTION_DST_PORT; // 要换 dst port
                     }
                 }
                 break;
@@ -8438,7 +8452,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 
         /* We won't be able to function properly in this case, hence
          * complain loudly. */
-        if (nat_config && !commit) {
+        if (nat_config && !commit) { // 又要求做 NAT, 但是又没有 commit, 那不干了.
             static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(5, 5);
             VLOG_WARN_RL(&rl, "NAT specified without commit.");
         }
@@ -8481,10 +8495,18 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
 }
 
 // ovs-dpdk 数据面的 action 执行都是从这里进入的, 有下述路径
-//  1. datapath 主路径: packet_batch_per_flow_execute() ->
-//  2. handle packet upcall 路径: handle_packet_upcall() ->
-//  3. 上层直接调用 datapath 的处理能力 dpif_netdev_execute() ->
+//  1. datapath 主路径: packet_batch_per_flow_execute() ->         // should_steal = true
+//  2. handle packet upcall 路径: handle_packet_upcall() ->        // should_steal = true
+//  3. 上层直接调用 datapath 的处理能力 dpif_netdev_execute() ->   // should_steal = false
 //  4. dp_execute_userspace_action() -> ???
+//
+// packets 是属于同一个 flow 需要被处理的报文
+// flow: 是从数据面 flow 提取的 field 等信息
+// aciton: 是从数据面 flow 提取的 action
+//
+// should_steal ???
+//
+//
 static void
 dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                           struct dp_packet_batch *packets,

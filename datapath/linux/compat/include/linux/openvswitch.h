@@ -819,24 +819,32 @@ struct ovs_action_push_tnl {
 
 /**
  * enum ovs_ct_attr - Attributes for %OVS_ACTION_ATTR_CT action.
+ *
  * @OVS_CT_ATTR_COMMIT: If present, commits the connection to the conntrack
  * table. This allows future packets for the same connection to be identified
  * as 'established' or 'related'. The flow key for the current packet will
  * retain the pre-commit connection state.
+ *
  * @OVS_CT_ATTR_ZONE: u16 connection tracking zone.
+ *
  * @OVS_CT_ATTR_MARK: u32 value followed by u32 mask. For each bit set in the
  * mask, the corresponding bit in the value is copied to the connection
  * tracking mark field in the connection.
+ *
  * @OVS_CT_ATTR_LABELS: %OVS_CT_LABELS_LEN value followed by %OVS_CT_LABELS_LEN
  * mask. For each bit set in the mask, the corresponding bit in the value is
  * copied to the connection tracking label field in the connection.
+ *
  * @OVS_CT_ATTR_HELPER: variable length string defining conntrack ALG.
+ *
  * @OVS_CT_ATTR_NAT: Nested OVS_NAT_ATTR_* for performing L3 network address
  * translation (NAT) on the packet.
+ *
  * @OVS_CT_ATTR_FORCE_COMMIT: Like %OVS_CT_ATTR_COMMIT, but instead of doing
  * nothing if the connection is already committed will check that the current
  * packet is in conntrack entry's original direction.  If directionality does
  * not match, will delete the existing conntrack entry and create a new one.
+ *
  * @OVS_CT_ATTR_EVENTMASK: Mask of bits indicating which conntrack event types
  * (enum ip_conntrack_events IPCT_*) should be reported.  For any bit set to
  * zero, the corresponding event type is not generated.  Default behavior
@@ -848,6 +856,7 @@ struct ovs_action_push_tnl {
  * be received on NFNLGRP_CONNTRACK_NEW and NFNLGRP_CONNTRACK_DESTROY groups,
  * respectively.  Remaining bits control the changes for which an event is
  * delivered on the NFNLGRP_CONNTRACK_UPDATE group.
+ *
  * @OVS_CT_ATTR_TIMEOUT: Variable length string defining conntrack timeout.
  */
 enum ovs_ct_attr {
@@ -881,6 +890,7 @@ struct ovs_action_push_eth {
  * enum ovs_nat_attr - Attributes for %OVS_CT_ATTR_NAT.
  *
  * @OVS_NAT_ATTR_SRC: Flag for Source NAT (mangle source address/port).
+ *
  * @OVS_NAT_ATTR_DST: Flag for Destination NAT (mangle destination
  * address/port).  Only one of (@OVS_NAT_ATTR_SRC, @OVS_NAT_ATTR_DST) may be
  * specified.  Effective only for packets for ct_state NEW connections.
@@ -890,12 +900,19 @@ struct ovs_action_push_eth {
  * connections.  The following NAT attributes only apply for NEW connections,
  * and they may be included only when the CT action has the @OVS_CT_ATTR_COMMIT
  * flag and either @OVS_NAT_ATTR_SRC, @OVS_NAT_ATTR_DST is also included.
+ *
  * @OVS_NAT_ATTR_IP_MIN: struct in_addr or struct in6_addr
+ *
  * @OVS_NAT_ATTR_IP_MAX: struct in_addr or struct in6_addr
+ *
  * @OVS_NAT_ATTR_PROTO_MIN: u16 L4 protocol specific lower boundary (port)
+ *
  * @OVS_NAT_ATTR_PROTO_MAX: u16 L4 protocol specific upper boundary (port)
+ *
  * @OVS_NAT_ATTR_PERSISTENT: Flag for persistent IP mapping across reboots
+ *
  * @OVS_NAT_ATTR_PROTO_HASH: Flag for pseudo random L4 port mapping (MD5)
+ *
  * @OVS_NAT_ATTR_PROTO_RANDOM: Flag for fully randomized L4 port mapping
  */
 enum ovs_nat_attr {

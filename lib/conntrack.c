@@ -580,6 +580,7 @@ conn_lookup(struct conntrack *ct, const struct conn_key *key,
     return conn_key_lookup(ct, key, hash, now, conn_out, reply);
 }
 
+// 设置 ct 相关的 metadata
 static void
 write_ct_md(struct dp_packet *pkt, uint16_t zone, const struct conn *conn,
             const struct conn_key *key, const struct alg_exp_node *alg_exp)
@@ -1348,7 +1349,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             ctx->reply = true;
             struct conn *rev_conn = conn;  /* Save for debugging. */
             uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis);
-            conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply);
+            conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ???
 
             if (!conn) {
                 pkt->md.ct_state |= CS_INVALID;
@@ -1433,7 +1434,12 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
  * If 'commit' is true, the packets are allowed to create new entries in the
  * connection tables.  'setmark', if not NULL, should point to a two
  * elements array containing a value and a mask to set the connection mark.
- * 'setlabel' behaves similarly for the connection label.*/
+ * 'setlabel' behaves similarly for the connection label.
+ *
+ *
+ * commit 是 true 的时候, 才允许 create new entries in CT table
+ *
+ * */
 int
 conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
                   ovs_be16 dl_type, bool force, bool commit, uint16_t zone,
@@ -1451,18 +1457,18 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
     struct conn_lookup_ctx ctx;
 
     DP_PACKET_BATCH_FOR_EACH (i, packet, pkt_batch) {
-        struct conn *conn = packet->md.conn;
-        if (OVS_UNLIKELY(packet->md.ct_state == CS_INVALID)) {
+        struct conn *conn = packet->md.conn; // 这个 conn 怎么来的 ???
+        if (OVS_UNLIKELY(packet->md.ct_state == CS_INVALID)) { // ref: %OVS_CS_F_INVALID, 什么时候会 INVALID, invalid pkt ???, ref: packets.h:CS_STATES
             write_ct_md(packet, zone, NULL, NULL, NULL);
         } else if (conn && conn->key.zone == zone && !force
-                   && !get_alg_ctl_type(packet, tp_src, tp_dst, helper)) {
+                   && !get_alg_ctl_type(packet, tp_src, tp_dst, helper)) { // 已经过了一次pipeline 了, 所以 conn 已经有了???
             process_one_fast(zone, setmark, setlabel, nat_action_info,
                              conn, packet);
         } else if (OVS_UNLIKELY(!conn_key_extract(ct, packet, dl_type, &ctx,
                                 zone))) {
             packet->md.ct_state = CS_INVALID;
             write_ct_md(packet, zone, NULL, NULL, NULL);
-        } else {
+        } else { // normal path
             process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
                         setlabel, nat_action_info, tp_src, tp_dst, helper,
                         tp_id);

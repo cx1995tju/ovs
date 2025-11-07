@@ -125,7 +125,7 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
                                    action. */
     uint32_t skb_priority;      /* Packet priority for QoS. */
     uint32_t pkt_mark;          /* Packet mark. */
-    uint8_t  ct_state;          /* Connection state. */ // %OVS_CS_F_NEW, %CS_TRACKED, ref: write_ct_md()
+    uint8_t  ct_state;          /* Connection state. */ // %OVS_CS_F_NEW, %CS_TRACKED, ref: write_ct_md() ref: packets.h::CS_STATES
     bool ct_orig_tuple_ipv6;
     uint16_t ct_zone;           /* Connection zone. */  // ct zone action 设置的, conntrack_execute() -> wrte_ct_md() %OVS_ACTION_ATTR_CT / OVS_CT_ATTR_ZONE, 目的是实现租户隔离的, 默认值是 0
     uint32_t ct_mark;           /* Connection mark. */  // ct action 设置

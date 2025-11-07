@@ -268,6 +268,8 @@ BUILD_MESSAGE("FLOW_WC_SEQ changed: miniflow_extract() will have runtime "
 // 将 valuep 指向 内存位置的 N_WORDS 个 U64, push 到 miniflow 里
 // 当然对应的 flowmap 也要设置的
 // MF 是 struct mf_ctx
+// mf: struct miniflow
+// ofs: 是 struct flow 结构体的 offset
 #define miniflow_push_words_(MF, OFS, VALUEP, N_WORDS)          \
 {                                                               \
     MINIFLOW_ASSERT((OFS) % 8 == 0);                            \
@@ -762,6 +764,8 @@ dump_invalid_packet(struct dp_packet *packet, const char *reason)
  */
 // 利用 packet 和 packet->md 中的信息来填充 dst, miniflow 是 flow 的压缩版本
 // 重要函数，是数据面的热点，packet 进入数据面后首先要做的事情就是提取 flow
+//
+// 从 pkt 本身以及 pkt->metadata 来提取 flow key 然后存放到压缩形式的 miniflow 里
 void
 miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
 {
@@ -782,6 +786,10 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     ovs_be16 ct_tp_src = 0, ct_tp_dst = 0;
 
     /* Metadata. */
+    // 第一次从 wire 接收的报文肯定是没有大部分 metadata 的
+    // 
+    // 这部分信息来自于之前已经经过了 datapath 处理, 被某些 action/CT/隧道 port
+    // 等特殊流程注入的. 第一次进入的时候肯定是没有的.
     if (flow_tnl_dst_is_set(&md->tunnel)) {
         miniflow_push_words(mf, tunnel, &md->tunnel,
                             offsetof(struct flow_tnl, metadata) /	/*  tunnel metadata 前面的部分 push 进去 */
@@ -809,9 +817,10 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         miniflow_push_uint32(mf, pkt_mark, md->pkt_mark);
     }
     miniflow_push_uint32(mf, dp_hash, md->dp_hash);
+    // in_port 这个字段是 pkt 第一次进入的时候就被初始化的: ref: pkt_metadata_init
     miniflow_push_uint32(mf, in_port, odp_to_u32(md->in_port.odp_port));
     if (md->ct_state) {
-        miniflow_push_uint32(mf, recirc_id, md->recirc_id);
+        miniflow_push_uint32(mf, recirc_id, md->recirc_id); // 既然有 ct_state, 肯定不是第一次进来了, 那么 recirc_id 肯定存在的
         miniflow_push_uint8(mf, ct_state, md->ct_state);
         ct_nw_proto_p = miniflow_pointer(mf, ct_nw_proto);
         miniflow_push_uint8(mf, ct_nw_proto, 0);
@@ -823,7 +832,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                                 sizeof md->ct_label / sizeof(uint64_t));
         }
     } else {
-        if (md->recirc_id) {
+        if (md->recirc_id) { // 没有 ct_state, recirc_id 不一定存爱的
             miniflow_push_uint32(mf, recirc_id, md->recirc_id);
             miniflow_pad_to_64(mf, recirc_id);
         }
@@ -831,10 +840,12 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         miniflow_push_be32(mf, packet_type, packet_type);
     }
 
+    // 从报文里开始提取信息了
     /* Initialize packet's layer pointer and offsets. */
     frame = data;
     dp_packet_reset_offsets(packet);
 
+    // XXX: L2 信息提取: dl_src, dl_dst, dl_type, 至多 2 个 vlan hdr
     if (packet_type == htonl(PT_ETH)) {
         /* Must have full Ethernet header to proceed. */
         if (OVS_UNLIKELY(size < sizeof(struct eth_header))) {
@@ -842,9 +853,9 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         } else {
             /* Link layer. */
             ASSERT_SEQUENTIAL(dl_dst, dl_src);
-            miniflow_push_macs(mf, dl_dst, data);
+            miniflow_push_macs(mf, dl_dst, data); // 注意这里将两个 mac 都提取了
 
-            /* VLAN */
+            /* VLAN */ // 提取至多 2 个 vlan hdr
             union flow_vlan_hdr vlans[FLOW_MAX_VLAN_HEADERS];
             size_t num_vlans = parse_vlan(&data, &size, vlans);
 
@@ -865,6 +876,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         miniflow_pad_to_64(mf, dl_type);
     }
 
+    // XXX: mpls 信息提取
     /* Parse mpls. */
     if (OVS_UNLIKELY(eth_type_mpls(dl_type))) {
         int count;
@@ -875,6 +887,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         miniflow_push_words_32(mf, mpls_lse, mpls, count);
     }
 
+    // XXX: L3 信息提取: nw_src, nw_dst
     /* Network layer. */
     packet->l3_ofs = (char *)data - frame;
 
@@ -884,6 +897,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         int ip_len;
         uint16_t tot_len;
 
+	// ipv4 合法性检查
         if (OVS_UNLIKELY(!ipv4_sanity_check(nh, size, &ip_len, &tot_len))) {
             if (OVS_UNLIKELY(VLOG_IS_DBG_ENABLED())) {
                 dump_invalid_packet(packet, "ipv4_sanity_check");
@@ -894,8 +908,8 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
         size = tot_len;   /* Never pull padding. */
 
         /* Push both source and destination address at once. */
-        miniflow_push_words(mf, nw_src, &nh->ip_src, 1);
-        if (ct_nw_proto_p && !md->ct_orig_tuple_ipv6) {
+        miniflow_push_words(mf, nw_src, &nh->ip_src, 1); // 这里也是 push 了两个 ip
+        if (ct_nw_proto_p && !md->ct_orig_tuple_ipv6) { // ct 相关, 第一次进来的时候不会提取的
             *ct_nw_proto_p = md->ct_orig_tuple.ipv4.ipv4_proto;
             if (*ct_nw_proto_p) {
                 miniflow_push_words(mf, ct_nw_src,
@@ -1007,17 +1021,19 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     miniflow_push_be32(mf, nw_frag,
                        bytes_to_be32(nw_frag, nw_tos, nw_ttl, nw_proto));
 
+    // XXX: 不是 ip 分片就进入 L4 处理
     if (OVS_LIKELY(!(nw_frag & FLOW_NW_FRAG_LATER))) {
         if (OVS_LIKELY(nw_proto == IPPROTO_TCP)) {
             if (OVS_LIKELY(size >= TCP_HEADER_LEN)) {
                 const struct tcp_header *tcp = data;
 
+		// arp_tha ???? 性能优化, 处理 padding ???
                 miniflow_push_be32(mf, arp_tha.ea[2], 0);
                 miniflow_push_be32(mf, tcp_flags,
                                    TCP_FLAGS_BE32(tcp->tcp_ctl));
                 miniflow_push_be16(mf, tp_src, tcp->tcp_src);
                 miniflow_push_be16(mf, tp_dst, tcp->tcp_dst);
-                miniflow_push_be16(mf, ct_tp_src, ct_tp_src);
+                miniflow_push_be16(mf, ct_tp_src, ct_tp_src); // 第一次进入的时候没有过 ct 是 0
                 miniflow_push_be16(mf, ct_tp_dst, ct_tp_dst);
             }
         } else if (OVS_LIKELY(nw_proto == IPPROTO_UDP)) {

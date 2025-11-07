@@ -97,7 +97,6 @@ BUILD_ASSERT_DECL(FLOW_MAX_VLAN_HEADERS % 2 == 0);
  * NOTE: Order of the fields is significant, any change in the order must be
  * reflected in miniflow_extract()!
  */
-// openflow 的 key
 struct flow {
     /* Metadata */
     // vxlan ingress 方向, pop header 的时候从 pkt 中提取出来放到 pkt_metadata.tunnel 中: ref: udp_extract_tnl_md()
