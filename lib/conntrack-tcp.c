@@ -160,6 +160,7 @@ tcp_bypass_seq_chk(struct conntrack *ct)
     return false;
 }
 
+// 关注返回值
 static enum ct_update_res
 tcp_conn_update(struct conntrack *ct, struct conn *conn_,
                 struct dp_packet *pkt, bool reply, long long now)
@@ -182,7 +183,7 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
         return CT_UPDATE_INVALID;
     }
 
-    if ((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) {
+    if ((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) { // 第一个 SYN 包
         if (dst->state >= CT_DPIF_TCPS_FIN_WAIT_2
             && src->state >= CT_DPIF_TCPS_FIN_WAIT_2) {
             src->state = dst->state = CT_DPIF_TCPS_CLOSED;

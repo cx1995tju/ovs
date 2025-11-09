@@ -584,11 +584,11 @@ struct ovs_nsh_key_md1 {
 					 * connection. */
 #define OVS_CS_F_REPLY_DIR         0x08 /* Flow is in the reply direction. */
 #define OVS_CS_F_INVALID           0x10 /* Could not track connection. */
-#define OVS_CS_F_TRACKED           0x20 /* Conntrack has occurred. */
+#define OVS_CS_F_TRACKED           0x20 /* Conntrack has occurred. */ // 标志 pkt 已经过过 ct 了
 #define OVS_CS_F_SRC_NAT           0x40 /* Packet's source address/port was
-					   mangled by NAT. */
+					   mangled by NAT. */ // 表示已经被 SNAT 了
 #define OVS_CS_F_DST_NAT           0x80 /* Packet's destination address/port
-					   was mangled by NAT. */
+					   was mangled by NAT. */ // 表示已经被 DNAT 了
 
 #define OVS_CS_F_NAT_MASK (OVS_CS_F_SRC_NAT | OVS_CS_F_DST_NAT)
 

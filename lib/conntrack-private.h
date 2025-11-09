@@ -120,7 +120,7 @@ struct conn {
 
     /* Immutable data. */
     bool alg_related; /* True if alg data connection. */
-    enum ct_conn_type conn_type;
+    enum ct_conn_type conn_type; // ref: CT_CONN_TYPE_UN_NAT
 
     uint32_t tp_id; /* Timeout policy ID. */
 };

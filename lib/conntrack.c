@@ -1088,6 +1088,10 @@ nat_res_exhaustion:
     return NULL;
 }
 
+/* XXX: 重要
+ *
+ * 什么样的报文, 会如何更新状态 ?
+ * */
 static bool
 conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
                   struct conn_lookup_ctx *ctx, struct conn *conn,
@@ -1106,10 +1110,11 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             pkt->md.ct_state |= CS_RELATED;
         }
 
+	// 这里设置了 ct_state
         enum ct_update_res res = conn_update(ct, conn, pkt, ctx, now);
 
         switch (res) {
-        case CT_UPDATE_VALID:
+        case CT_UPDATE_VALID: // HERE
             pkt->md.ct_state |= CS_ESTABLISHED;
             pkt->md.ct_state &= ~CS_NEW;
             if (ctx->reply) {
@@ -1119,7 +1124,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
         case CT_UPDATE_INVALID:
             pkt->md.ct_state = CS_INVALID;
             break;
-        case CT_UPDATE_NEW:
+        case CT_UPDATE_NEW: // HERE
             ovs_mutex_lock(&ct->ct_lock);
             if (conn_lookup(ct, &conn->key, now, NULL, NULL)) {
                 conn_clean(ct, conn);
@@ -1127,7 +1132,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             ovs_mutex_unlock(&ct->ct_lock);
             create_new_conn = true;
             break;
-        case CT_UPDATE_VALID_NEW:
+        case CT_UPDATE_VALID_NEW: // HERE
             pkt->md.ct_state |= CS_NEW;
             break;
         default:
@@ -1137,6 +1142,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
     return create_new_conn;
 }
 
+// 重要, 做 nat / un_nat
 static void
 handle_nat(struct dp_packet *pkt, struct conn *conn,
            uint16_t zone, bool reply, bool related)
@@ -1144,10 +1150,10 @@ handle_nat(struct dp_packet *pkt, struct conn *conn,
     if (conn->nat_action &&
         (!(pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) ||
           (pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT) &&
-           zone != pkt->md.ct_zone))) {
+           zone != pkt->md.ct_zone))) { // 没有做过 NAT, 或者做了 NAT, 但是进入了新的 zone
 
         if (pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) {
-            pkt->md.ct_state &= ~(CS_SRC_NAT | CS_DST_NAT);
+            pkt->md.ct_state &= ~(CS_SRC_NAT | CS_DST_NAT); // 这表示是进入了新的 zone 再次做 NAT
         }
         if (reply) {
             un_nat_packet(pkt, conn, related);
@@ -1157,6 +1163,8 @@ handle_nat(struct dp_packet *pkt, struct conn *conn,
     }
 }
 
+// 用 ct_orig_tuple 里的信息重置 key 后再重新 look 一次
+// ct_orig_tuple 在哪里设置的, write_ct_md.
 static bool
 check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
                  struct conn_lookup_ctx *ctx_in, long long now,
@@ -1168,7 +1176,7 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
          !pkt->md.ct_orig_tuple.ipv4.ipv4_proto) ||
         (ctx_in->key.dl_type == htons(ETH_TYPE_IPV6) &&
          !pkt->md.ct_orig_tuple.ipv6.ipv6_proto) ||
-        nat_action_info) {
+        nat_action_info) { // 没有做过 nat(那肯定没有 ct_orig_tuple) 就不尝试再次 look 了, 或者有 nat action 也不尝试了
         return false;
     }
 
@@ -1286,6 +1294,28 @@ process_one_fast(uint16_t zone, const uint32_t *setmark,
     }
 }
 
+/* @ctx 返回查找结果
+ *
+ * @natted: 是否要做 nat
+ * 
+ * 考虑 SNAT: A->B 被 SNAT 为 C->B. 那么 conn 的两个方向就是: A->B / B->C
+ * - A -> B 被 SNAT 为了 C->B. 当这个 pkt 来了后有两个问题:
+ *   - 不知道之前的 src 是 A
+ *   - C->B 也不在 CT 里 track. 
+ *   所以就将其反过来查找, 然后将查找结果的再反过来一次.
+ *
+ *
+ * 考虑 DNAT: A->B 被 DNAT 为 A->C. 那么 conn 的两个方向就是: A->B / C->B
+ * -  A->B 被 DNAT 为 A->C 后, 这个 pkt 来了后有两个问题:
+ *    - 不知道原始的 dst 是 B
+ *    - A->C 也不在 CT 里 track.
+ *    所以就将其反过来查找, 然后将查找结果的再反过来一次.
+ *
+ *
+ * 考虑 SNAT + DNAT: A->B 被 SNAT + DNAT 为 C->D. 那么 conn 两个方向就是: A->B / D->C
+ * 所以和前面一样, 也要反过来查找.
+ *
+ * */
 static void
 initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
                     long long now, bool natted)
@@ -1294,14 +1324,15 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
         /* If the packet has been already natted (e.g. a previous
          * action took place), retrieve it performing a lookup of its
          * reverse key. */
-        conn_key_reverse(&ctx->key);
+        conn_key_reverse(&ctx->key); // why ???
     }
 
+    //  conn, reply 是查找结果
     conn_key_lookup(ct, &ctx->key, ctx->hash, now, &ctx->conn, &ctx->reply);
 
     if (natted) {
         if (OVS_LIKELY(ctx->conn)) {
-            ctx->reply = !ctx->reply;
+            ctx->reply = !ctx->reply; // 也要取反的
             ctx->key = ctx->reply ? ctx->conn->rev_key : ctx->conn->key;
             ctx->hash = conn_key_hash(&ctx->key, ct->hash_basis);
         } else {
@@ -1314,6 +1345,13 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
     }
 }
 
+/* @ctx: 用来返回处理结果的, 另外其中的 key 部分 则是用来查找 conn 的 key, 已经从 报文里提取出来了.
+ *
+ *
+ * @zone, @force, @commit, @setmark, @setlabel, @nat_action_info, @tp_src, @tp_id
+ *
+ * @tp_dst, tp_dst, 报文 flow 里的信息.
+ */
 static void
 process_one(struct conntrack *ct, struct dp_packet *pkt,
             struct conn_lookup_ctx *ctx, uint16_t zone,
@@ -1329,14 +1367,15 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     bool create_new_conn = false;
+    // 第一次查找
     initial_conn_lookup(ct, ctx, now, !!(pkt->md.ct_state &
                                          (CS_SRC_NAT | CS_DST_NAT)));
     struct conn *conn = ctx->conn;
 
     /* Delete found entry if in wrong direction. 'force' implies commit. */
-    if (OVS_UNLIKELY(force && ctx->reply && conn)) {
+    if (OVS_UNLIKELY(force && ctx->reply && conn)) { // 处理: OVS_CT_ATTR_FORCE_COMMIT action.
         ovs_mutex_lock(&ct->ct_lock);
-        if (conn_lookup(ct, &conn->key, now, NULL, NULL)) {
+        if (conn_lookup(ct, &conn->key, now, NULL, NULL)) { // 这里如果找到了已有的 conn, 要清空的
             conn_clean(ct, conn);
         }
         ovs_mutex_unlock(&ct->ct_lock);
@@ -1344,11 +1383,11 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     if (OVS_LIKELY(conn)) {
-        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) {
+        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) { // 做 unnat ???  什么时候设置的 ?   表示这个是 NAT 的反向要做 unnat 了 ???
 
             ctx->reply = true;
             struct conn *rev_conn = conn;  /* Save for debugging. */
-            uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis);
+            uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis); // 用新的 hash 和 reply 值重新查找 ???
             conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ???
 
             if (!conn) {
@@ -1365,18 +1404,21 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     enum ct_alg_ctl_type ct_alg_ctl = get_alg_ctl_type(pkt, tp_src, tp_dst,
                                                        helper);
 
-    if (OVS_LIKELY(conn)) {
+    // 首先要 update conn
+    // 根据情况判断: 做不做 nat, 要不要创建新的 conn
+    if (OVS_LIKELY(conn)) { // 找到 conn 了
         if (OVS_LIKELY(!conn_update_state_alg(ct, pkt, ctx, conn,
                                               nat_action_info,
                                               ct_alg_ctl, now,
                                               &create_new_conn))) {
+		// 更新 pkt ct 状态
             create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
         }
         if (nat_action_info && !create_new_conn) {
             handle_nat(pkt, conn, zone, ctx->reply, ctx->icmp_related);
         }
 
-    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) {
+    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 没有找到 conn 才会进来, 说明还没有被 CT, 这里面会再找一次 conn
         create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
     } else {
         if (ctx->icmp_related) {
@@ -1391,6 +1433,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     const struct alg_exp_node *alg_exp = NULL;
     struct alg_exp_node alg_exp_entry;
 
+    // 创建新的 conn
     if (OVS_UNLIKELY(create_new_conn)) {
 
         ovs_rwlock_rdlock(&ct->resources_lock);
@@ -1411,8 +1454,10 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         ovs_mutex_unlock(&ct->ct_lock);
     }
 
+    // 为报文设置 ct 相关 metadata, 这里会设置 tracked
     write_ct_md(pkt, zone, conn, &ctx->key, alg_exp);
 
+    // 设置 mac, label
     if (conn && setmark) {
         set_mark(pkt, conn, setmark[0], setmark[1]);
     }
@@ -1421,8 +1466,10 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         set_label(pkt, conn, &setlabel[0], &setlabel[1]);
     }
 
+    // FTP, TFTP 的处理.
     handle_alg_ctl(ct, ctx, pkt, ct_alg_ctl, conn, now, !!nat_action_info);
 
+    // pkt 里保存一些 ct 相关的信息, 加速后续 pkt 再次进来查找.
     set_cached_conn(nat_action_info, ctx, conn, pkt);
 }
 
@@ -1438,7 +1485,11 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
  *
  *
  * commit 是 true 的时候, 才允许 create new entries in CT table
+ * 
  *
+ * ct: per datapath(???)
+ *
+ * dl_type: ipv4/6
  * */
 int
 conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
@@ -1460,15 +1511,15 @@ conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,
         struct conn *conn = packet->md.conn; // 这个 conn 怎么来的 ???
         if (OVS_UNLIKELY(packet->md.ct_state == CS_INVALID)) { // ref: %OVS_CS_F_INVALID, 什么时候会 INVALID, invalid pkt ???, ref: packets.h:CS_STATES
             write_ct_md(packet, zone, NULL, NULL, NULL);
-        } else if (conn && conn->key.zone == zone && !force
+        } else if (conn && conn->key.zone == zone && !force                // zone 是从 ct action 提取的, 要和 conn 的对的上, 说明不需要修改 zone, 所以走 fast path
                    && !get_alg_ctl_type(packet, tp_src, tp_dst, helper)) { // 已经过了一次pipeline 了, 所以 conn 已经有了???
             process_one_fast(zone, setmark, setlabel, nat_action_info,
                              conn, packet);
         } else if (OVS_UNLIKELY(!conn_key_extract(ct, packet, dl_type, &ctx,
-                                zone))) {
+                                zone))) { //  从 packet 里提取 conn key
             packet->md.ct_state = CS_INVALID;
             write_ct_md(packet, zone, NULL, NULL, NULL);
-        } else { // normal path
+        } else { // normal path: conn_key 已经提取了, ref:ctx
             process_one(ct, packet, &ctx, zone, force, commit, now, setmark,
                         setlabel, nat_action_info, tp_src, tp_dst, helper,
                         tp_id);
@@ -2044,6 +2095,24 @@ extract_l4(struct conn_key *key, const void *data, size_t size, bool *related,
     return true;
 }
 
+/* dl_type: ipv4/ipv6
+ *
+ * zone: 从 ct action 里提取的
+ *
+ * @ctx: 返回结果用的
+ *
+ *
+ * 提取 ct 需要用到的报文的一些信息, 为什么在 miniflow_extract 里已经提取了, 这里还要提取.
+ *
+ * 因为 miniflow 里保存的是压缩形式, 这里拿出来代价比较大, 重新提取一次反而开销小.
+ *
+ * 提取的信息保存:
+ * - dl_type
+ * - zone
+ * - l4 type
+ * - src / dst addr
+ *
+ * */
 static bool
 conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
                  struct conn_lookup_ctx *ctx, uint16_t zone)
@@ -2054,7 +2123,7 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
 
     memset(ctx, 0, sizeof *ctx);
 
-    if (!l2 || !l3 || !l4) {
+    if (!l2 || !l3 || !l4) { // ct 肯定需要针对完整的 l4 pkt 的
         return false;
     }
 
@@ -2090,7 +2159,14 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
      *     time as we move the packet around. Most importantly, the flow
      *     should be updated by the actions and this can be slow, as
      *     we use a sparse representation (miniflow).
+     * 
+     * 需要提取 l3 addr 和 l4 port, l4 type, 虽然这个已经在 miniflow_extract 里
+     * 提取过了. 但是提取的信息保存在 miniflow 里, 拿出来是要代价的.
      *
+     * 而因为在 miniflow_extract 里已经设置了不通 layer 的偏移的, 所以提取 l3
+     * addr 和 l4 port 很容易. 唯一麻烦的是 提取 ipv6 的 l4 type, 其位置不固定.
+     *
+     * 这个信息去对应的 megaflow 里提取
      */
     bool ok;
     ctx->key.dl_type = dl_type;
@@ -2479,6 +2555,7 @@ next_addr:
     goto another_round;
 }
 
+/* 重要 */
 static enum ct_update_res
 conn_update(struct conntrack *ct, struct conn *conn, struct dp_packet *pkt,
             struct conn_lookup_ctx *ctx, long long now)
