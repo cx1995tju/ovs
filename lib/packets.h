@@ -137,6 +137,15 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     bool icmp_related;          /* True if ICMP related. */
 );
 
+/* 关于 original direction tuple: */
+/*    - 对于 non-commited non-related connections, ct 的 orignal direction tuple */
+/*      和 pkt 本身的头的值一样. */
+/*    - 对于 commited connection 的 pkt. ct original direction tuple 翻译的是最开 */
+/*      始 non-commited non-related pkt 的值. 所以可能和当前 pkt 的实际内容不一样. */
+/*      因为实际 pkt hdr 可能处于反向, 经过 NAT 转换, 或者协议不同 (比如: ICMP */
+/*      response is sent to an UDP packet). */
+/*    - 对于 related connection, 比如 ftp data connection, original tuple 包含 */
+/*      parent connection(比如: FTP control connection) 的原始方向头部. */
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
     union {                     /* Populated only for non-zero 'ct_state'. */
         struct ovs_key_ct_tuple_ipv4 ipv4;

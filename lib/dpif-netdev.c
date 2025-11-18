@@ -258,6 +258,7 @@ enum sched_assignment_type {
  *    不过对于ovs kernel是否是这样，不确定
  */
 //表示一个datapath，是基于 lib/netdev 库实现的
+//per-datapath-type 粒度的, 这是 netdev type 的 datapath 的实现
 struct dp_netdev {
     const struct dpif_class *const class; //%dpif_netdev_class, 各种函数集合
     const char *const name;
@@ -468,8 +469,10 @@ struct tx_bond {
 // 表示一个操作 netdev-based datapath 的接口
 // dpif 是其基类
 // dp_netdev 是 这个 netdev-based datapath 的实现中对 datapath 的抽象
+// ref: dpif_open
+// per-datapath type 结构, 这里是 netdev type 的 implementation
 struct dpif_netdev {
-    struct dpif dpif;
+    struct dpif dpif; // first-member inherit
     struct dp_netdev *dp;
     uint64_t last_port_seq;
 };
@@ -7093,9 +7096,9 @@ dp_netdev_flow_used(struct dp_netdev_flow *netdev_flow, int cnt, int size,
  *    @ufid: unique flow id
  *
  * OUT:
- *    @wc:
- *    @actions:
- *    @put_actions:
+ *    @wc: 从 openflow 获得 wildcard, 结合 flow, 得到一个 megaflow 的匹配(match): flow + wildcard
+ *    @actions: 从 openflow 获得的 action 列表 
+ *    @put_actions: 从 openflow 获得的 put_actions 列表(???)
  * */
 static int
 dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
@@ -7109,7 +7112,7 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
         return ENODEV;
     }
 
-    if (OVS_UNLIKELY(!VLOG_DROP_DBG(&upcall_rl))) {
+    if (OVS_UNLIKELY(!VLOG_DROP_DBG(&upcall_rl))) { // 打 log
         struct ds ds = DS_EMPTY_INITIALIZER;
         char *packet_str;
         struct ofpbuf key;
@@ -7136,7 +7139,7 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
 
     // refer to: ofproto/ofproto-dpif-upcall.c:upcall_cb()
     return dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata, 
-                         actions, wc, put_actions, dp->upcall_aux);
+                         actions, wc, put_actions, dp->upcall_aux); // 就是 udpif_create() -> dpif_register_upcall_cb(dpif, upcall_cb, udpif) 中的 udpif, 保存了一些 ctx 吧 ?
 }
 
 static inline uint32_t
@@ -7598,6 +7601,9 @@ dfc_processing(struct dp_netdev_pmd_thread *pmd,
 }
 
 // 处理那些 在 megaflow(dpcls) 中也 miss 的报文
+// @packet: 报文
+// @key: 报文 key, 其中包含 miniflow
+// @actions, put_actions: 用来保存翻译结果 ???
 static inline int
 handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
                      struct dp_packet *packet,
@@ -7606,7 +7612,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
 {
     struct ofpbuf *add_actions;
     struct dp_packet_batch b;
-    struct match match;
+    struct match match; // 用来保存 openflow 侧的匹配结果 ??? key 来自于 packet 里, wildcard 来自于 openflow 侧 ???
     ovs_u128 ufid;
     int error;
     uint64_t cycles = cycles_counter_update(&pmd->perf_stats);
@@ -7619,8 +7625,8 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd,
     ofpbuf_clear(actions);
     ofpbuf_clear(put_actions);
 
-    odp_flow_key_hash(&match.flow, sizeof match.flow, &ufid);
-    error = dp_netdev_upcall(pmd, packet, &match.flow, &match.wc,
+    odp_flow_key_hash(&match.flow, sizeof match.flow, &ufid); // 搞一个 uuid 出来, 作为 flow 在 datapath 的标识
+    error = dp_netdev_upcall(pmd, packet, &match.flow, &match.wc, // 关键
                              &ufid, DPIF_UC_MISS, NULL, actions,
                              put_actions);
     if (OVS_UNLIKELY(error && error != ENOSPC)) {

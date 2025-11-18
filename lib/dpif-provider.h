@@ -33,6 +33,9 @@ extern "C" {
 /* Open vSwitch datapath interface.
  *
  * This structure should be treated as opaque by dpif implementations. */
+// datapath interface
+// ref: open_dpif_backer() -> create_dp_netdev(),  struct dpif_backer
+// per-datapath-type 结构
 struct dpif {
     const struct dpif_class *dpif_class;
     char *base_name;
@@ -114,6 +117,7 @@ struct dpif_ipf_status {
  * necessary to obtain a result.  Thus, they may not return EAGAIN or
  * EWOULDBLOCK or EINPROGRESS.  We may relax this requirement in the future if
  * and when we encounter performance problems. */
+// ref: %dpif_netdev_class, per datapath type 的 callback
 struct dpif_class {
     /* Type of dpif in this class, e.g. "system", "netdev", etc.
      *

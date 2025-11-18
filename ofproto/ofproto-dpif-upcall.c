@@ -122,8 +122,10 @@ struct revalidator {
  *    - Revalidation threads which read the datapath flow table and maintains
  *      them.
  */
-//refer to open_dpif_backer(), udpif_create()
+//refer to open_dpif_backer()->udpif_create()
 //用来处理 upcall 的 ctx
+//upcall datapath interface
+// per-datapath-type 结构
 struct udpif {
     struct ovs_list list_node;         /* In all_udpifs list. */
 
@@ -1088,6 +1090,7 @@ classify_upcall(enum dpif_upcall_type type, const struct nlattr *userdata,
                      userdata_len);
         return BAD_UPCALL;
     }
+    // 不是 miss 导致的 upcall, 就会去分析 flow 里的 userdata, 然后看看更具体的原因
     memcpy(cookie, nl_attr_get(userdata), sizeof *cookie);
     if (cookie->type == USER_ACTION_COOKIE_SFLOW) {
         return SFLOW_UPCALL;
@@ -1160,10 +1163,10 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
  *     - @type: upcall reason
  *     - @userdata: upcall 附带的信息， 当 reason 是 DPIF_UC_ACTION 的时候会携带一些数据
  *     - @flow: key
+ *     - @ufid: unique flow id
  *
  *  OUT:
  *     - @upcall: 核心就是要构造这个结构 upcall_ctx
- *     - @ufid: unique flow id
  */
 static int
 upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
@@ -1196,6 +1199,7 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
         upcall->ofp_in_port = upcall->cookie.ofp_in_port;
     }
 
+    // 赋予初始值咯
     upcall->recirc = NULL;
     upcall->have_recirc_ref = false;
     upcall->flow = flow;
@@ -1378,15 +1382,16 @@ should_install_flow(struct udpif *udpif, struct upcall *upcall)
  *    @pmd_id: 调用该函数的 pmd core_id
  *    @type: upcall 的理由, 比如: DPIF_UC_MISS, DPIF_UC_ACTION
  *    @userdata: 当 upcall 的理由是 DPIF_UC_ACTION 的时候会携带一些数据
- *    @aux: struct udpif, ref: udpif_create()
+ *    @aux: struct udpif, ref: udpif_create() 中创建的 udpif
+ *    @ufid: unique flow id
  *
  * OUT:
- *    @ufid: unique flow id
- *    @wc:
- *    @actions:
- *    @put_actions:
+ *    @wc: 从 openflow 获得 wildcard, 结合 flow, 得到一个 megaflow 的匹配(match): flow + wildcard
+ *    @actions: 从 openflow 获得的 action 列表 
+ *    @put_actions: 从 openflow 获得的 put_actions 列表(???)
  * */
 // ovs-dpdk: dp_netdev_upcall() -> upcall_cb()
+// updif: upcall datapath interface
 static int
 upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,	// userspace 处理 upcall 的报文。即 megaflow miss 的报文
           unsigned pmd_id, enum dpif_upcall_type type,

@@ -1615,7 +1615,9 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
  *
  * Returns 0 if successful, ENODEV if the parsed flow has no associated ofproto.
  */
-/* IN
+/* 找到 flow 关联的 openflow bridge, port, 以及其他信息(监控相关)
+ *
+ * IN
  *    @backer
  *    @flow
  * OUT:

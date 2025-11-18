@@ -730,6 +730,7 @@ struct odp_garbage {
 
 static void check_support(struct dpif_backer *backer);
 
+//@type: "netdev", "system"
 static int
 open_dpif_backer(const char *type, struct dpif_backer **backerp)
 {

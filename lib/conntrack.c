@@ -989,7 +989,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
         pkt->md.ct_state |= CS_RELATED;
     }
 
-    if (commit) {
+    if (commit) { // 有 commit 要创建新的
         struct zone_limit *zl = zone_limit_lookup_or_default(ct,
                                                              ctx->key.zone);
         if (zl && zl->czl.count >= zl->czl.limit) {
@@ -1383,11 +1383,11 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     if (OVS_LIKELY(conn)) {
-        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) { // 做 unnat ???  什么时候设置的 ?   表示这个是 NAT 的反向要做 unnat 了 ???
+        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) { // ref: conn_not_found. 为 nat conn 创建 ct 的时候同步创建了反向的 conn
 
             ctx->reply = true;
             struct conn *rev_conn = conn;  /* Save for debugging. */
-            uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis); // 用新的 hash 和 reply 值重新查找 ???
+            uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis); // 用 rev_key 去重新找反向的信息 ???
             conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ???
 
             if (!conn) {
@@ -1418,7 +1418,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             handle_nat(pkt, conn, zone, ctx->reply, ctx->icmp_related);
         }
 
-    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 没有找到 conn 才会进来, 说明还没有被 CT, 这里面会再找一次 conn
+    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 没有找到 conn 才会进来, 说明还没有被 CT, 这里面会针对 nat 这些特殊情况再找一次 conn
         create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
     } else {
         if (ctx->icmp_related) {
@@ -1490,6 +1490,12 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
  * ct: per datapath(???)
  *
  * dl_type: ipv4/6
+ *
+ *
+ * 带有 ct action 的话, 报文就会进入这里被处理:
+ * - 报文 cs_state 被标记为 INVALID, 那么重新设置下 ct metadata
+ * - 报文的 metadata 里直接提取到了 conn, 说明之前进来过一次, 这一次直接走快速路径处理
+ * - 否则从 pakcet 里提取 conn key. 提取成功, 走慢速路径处理; 提取失败, 标记为 INVALID
  * */
 int
 conntrack_execute(struct conntrack *ct, struct dp_packet_batch *pkt_batch,

@@ -775,7 +775,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     const struct pkt_metadata *md = &packet->md;
     const void *data = dp_packet_data(packet);
     size_t size = dp_packet_size(packet);
-    ovs_be32 packet_type = packet->packet_type;
+    ovs_be32 packet_type = packet->packet_type; // 哪里来的?
     uint64_t *values = miniflow_values(dst);
     struct mf_ctx mf = { FLOWMAP_EMPTY_INITIALIZER, values,
                          values + FLOW_U64S };
@@ -832,7 +832,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
                                 sizeof md->ct_label / sizeof(uint64_t));
         }
     } else {
-        if (md->recirc_id) { // 没有 ct_state, recirc_id 不一定存爱的
+        if (md->recirc_id) { // 没有 ct_state, recirc_id 不一定存在的
             miniflow_push_uint32(mf, recirc_id, md->recirc_id);
             miniflow_pad_to_64(mf, recirc_id);
         }
@@ -846,7 +846,7 @@ miniflow_extract(struct dp_packet *packet, struct miniflow *dst)
     dp_packet_reset_offsets(packet);
 
     // XXX: L2 信息提取: dl_src, dl_dst, dl_type, 至多 2 个 vlan hdr
-    if (packet_type == htonl(PT_ETH)) {
+    if (packet_type == htonl(PT_ETH)) { // by default 是 0 ???  除非有 action 特别设置 ???
         /* Must have full Ethernet header to proceed. */
         if (OVS_UNLIKELY(size < sizeof(struct eth_header))) {
             goto out;
