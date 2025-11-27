@@ -929,6 +929,9 @@ BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
  *
  * Names like CS_RELATED are bit values, e.g. 1 << 2.
  * Names like CS_RELATED_BIT are bit indexes, e.g. 2. */
+
+
+// invalid: 处理的过程出错了
 #define CS_STATES                               \
     CS_STATE(NEW,         0, "new")             \
     CS_STATE(ESTABLISHED, 1, "est")             \

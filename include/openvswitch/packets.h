@@ -27,7 +27,11 @@ extern "C" {
 
 /* Tunnel information used in flow key and metadata. */
 // 注意 如果是 ingress 的时候 pop header 提取的信息, 下面 xxx_dst 信息, 其实指的是 local, 而不是 peer
-// ref: udp_extract_tnl_md
+//
+// ingress 方向从 packet 里 pop header 获取的 ref: udp_extract_tnl_md
+//
+// egress 方向是 action 设置的, 在翻译了 output action 后才有的 ???
+//
 struct flow_tnl {
     ovs_be32 ip_dst;
     struct in6_addr ipv6_dst;

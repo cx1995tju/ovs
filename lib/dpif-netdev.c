@@ -8306,6 +8306,14 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
         break;
 
     case OVS_ACTION_ATTR_RECIRC:
+	// recirc 的基本用法, 是让 pkt 可以多次进入 pipeline, 然后匹配不同的
+        // flow. 比如 nat 做完后, 匹配一条新 flow
+        //
+        // 其 datapath flow install 流程也是比较 tricky 的:
+	// - 当 pkt upcall 的时候, openflow 会为其添加一条 recirc datapath flow, 带一个 id,
+	// - 然后 pkt 可以得到处理, 当其 recirc 的时候, 又 MISS 了, 又需要
+	// upcall, 这时候上层就会通过 recirc id 找到上一次翻译的 ctx, 继续做翻
+	// 译.
         if (*depth < MAX_RECIRC_DEPTH) {
             struct dp_packet_batch recirc_pkts;
 

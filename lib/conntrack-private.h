@@ -91,15 +91,16 @@ enum OVS_PACKED_ENUM ct_conn_type {
     CT_CONN_TYPE_UN_NAT,
 };
 
+// XXX: 核心的核心结构
 struct conn {
     /* Immutable data. */
-    struct conn_key key;
+    struct conn_key key; // 5-tuple
     struct conn_key rev_key;
-    struct conn_key parent_key; /* Only used for orig_tuple support. */
-    struct ovs_list exp_node;
-    struct cmap_node cm_node;
-    uint16_t nat_action; // %NAT_ACTION_DST_PORT
-    char *alg;
+    struct conn_key parent_key; /* Only used for orig_tuple support. */ // 支持 ftp 这种功能
+    struct ovs_list exp_node; // 用于连接 跟踪扩展的 list
+    struct cmap_node cm_node; // 连接到 hash 表
+    uint16_t nat_action; // %NAT_ACTION_DST_PORT   nat action
+    char *alg; // fip, sip 应用层网关 (ALG)
     struct conn *nat_conn; /* The NAT 'conn' context, if there is one. */
 
     /* Mutable data. */
@@ -107,7 +108,7 @@ struct conn {
     ovs_u128 label;
     long long expiration;
     uint32_t mark;
-    int seq_skew;
+    int seq_skew; // tcp 序号偏移量, 用于 ftp, alg 场景. 某些操作导致序号比阿华了, 那么么就需要记录偏移量, 用于后续的 seq 校验
 
     /* Immutable data. */
     int32_t admit_zone; /* The zone for managing zone limit counts. */
@@ -226,13 +227,21 @@ extern struct ct_l4_proto ct_proto_other;
 extern struct ct_l4_proto ct_proto_icmp4;
 extern struct ct_l4_proto ct_proto_icmp6;
 
+// 核心结构, 各个 l4 实现 protocol specific 的逻辑
 struct ct_l4_proto {
+	// 创建新连接
     struct conn *(*new_conn)(struct conntrack *ct, struct dp_packet *pkt,
                              long long now, uint32_t tp_id);
+
+    // 校验 pkt 用来创建 new conn 是否合法
     bool (*valid_new)(struct dp_packet *pkt);
+
+    // 主题逻辑, pkt 都送到这里来更新状态
     enum ct_update_res (*conn_update)(struct conntrack *ct, struct conn *conn,
                                       struct dp_packet *pkt, bool reply,
                                       long long now);
+
+    // dump 连接相关信息
     void (*conn_get_protoinfo)(const struct conn *,
                                struct ct_dpif_protoinfo *);
 };

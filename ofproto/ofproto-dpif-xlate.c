@@ -1516,9 +1516,10 @@ xlate_ofport_remove(struct ofport_dpif *ofport)
  *    @backer
  *    @flow
  * OUT:
- *    @ofp_in_port
+ *    @ofp_in_port: openflow port in port
  *    @xportp
  * */
+// XXX: 针对 tunnel port 和 recirculated packet 的特殊处理
 static struct ofproto_dpif *
 xlate_lookup_ofproto_(const struct dpif_backer *backer,
                       const struct flow *flow,
@@ -1529,7 +1530,8 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
     const struct xport *xport;
 
     /* If packet is recirculated, xport can be retrieved from frozen state. */
-    if (flow->recirc_id) { // 说明之前被 frezze 过, ref: OVS_ACTION_ATTR_RECIRC
+    // ref: dp_execute_cb: case OVS_ACTION_ATTR_RECIRC
+    if (flow->recirc_id) { // 说明之前被 frezze 过, ref: OVS_ACTION_ATTR_RECIRC, 那么利用之前的 ctx 来提取
         const struct recirc_id_node *recirc_id_node;
 
         recirc_id_node = recirc_id_node_find(flow->recirc_id);
@@ -1571,6 +1573,11 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
         }
     }
 
+    // 如果是 tunnel 报文, 需要提取其 outer 5-tuple 等信息, 来判断是否是我们需要处理的 packet. 然后再来查找 ofport
+    // 这里本质上实现了 隧道的穿越, 即从 物理口收到的报文, 是通过隧道口进入的(in_port 被设置为 隧道 port 来分析的)
+    //
+    // 这里如果 flow 的 tunnel 被设置了, 肯定是 ingress tunnel 报文. 因为
+    // output 方向的话, tunnel 是在 output tunnel action 设置的. 肯定是已经翻译了
     xport = xport_lookup(xcfg, tnl_port_should_receive(flow)
                          ? tnl_port_receive(flow)
                          : odp_port_to_ofport(backer, flow->in_port.odp_port));
@@ -1636,6 +1643,7 @@ xlate_lookup(const struct dpif_backer *backer, const struct flow *flow,
     struct ofproto_dpif *ofproto;
     const struct xport *xport;
 
+    // XXX: 针对 tunnel port 和 recirculated packet 的特殊处理
     ofproto = xlate_lookup_ofproto_(backer, flow, ofp_in_port, &xport, NULL);
 
     if (!ofproto) {
@@ -7410,7 +7418,7 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
 
     /* Do recirc lookup. */
     xin->frozen_state = NULL;
-    if (flow->recirc_id) {
+    if (flow->recirc_id) { // flow 有 recirc_id, 那么就从里面提取出 frozen_state
         const struct recirc_id_node *node
             = recirc_id_node_find(flow->recirc_id);
         if (node) {

@@ -209,8 +209,8 @@ enum reval_result {
 
 // 处理 upcall 的时候的核心的 ctx. ref: upcall_cb()->upcall_receive()
 struct upcall {
-    struct ofproto_dpif *ofproto;  /* Parent ofproto. */
-    const struct recirc_id_node *recirc; /* Recirculation context. */
+    struct ofproto_dpif *ofproto;  /* Parent ofproto. */ // 关联的 openflow bridge
+    const struct recirc_id_node *recirc; /* Recirculation context. */ // 同样的 pkt 之前 upcall 的时候保存的 recirc ctx
     bool have_recirc_ref;                /* Reference held on recirc ctx? */
 
     /* The flow and packet are only required to be constant when using
@@ -1160,9 +1160,12 @@ compose_slow_path(struct udpif *udpif, struct xlate_out *xout,
 /*  @backer: ref: all_dpif_backers 'ovs-netdev'
  *
  *  IN:
+ *     - @backer: 一个 per datapath-type 的全局结构体
+ *     - @packet: 触发 upcall 的 packet
  *     - @type: upcall reason
- *     - @userdata: upcall 附带的信息， 当 reason 是 DPIF_UC_ACTION 的时候会携带一些数据
- *     - @flow: key
+ *     - @userdata: upcall 附带的信息， 当 reason 是 DPIF_UC_ACTION 的时候会携带一些数据, 用来进一步分析 upcall reason, ref: classify_upcall
+ *     - @flow: key, 数据面已经从 packet 里提取出来的 key
+ *     - @mru: ovs-dpdk 路径为 0
  *     - @ufid: unique flow id
  *
  *  OUT:
@@ -1181,6 +1184,7 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
     if (upcall->type == BAD_UPCALL) {
         return EAGAIN;
     } else if (upcall->type == MISS_UPCALL) { // XXX: __HERE__
+        // 为 flow 找到关联的 bridge, inport, 还有其他一些信息 
         error = xlate_lookup(backer, flow, &upcall->ofproto, &upcall->ipfix,
                              &upcall->sflow, NULL, &upcall->ofp_in_port);
         if (error) {
@@ -1230,7 +1234,8 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
  *    @upcall: upcall 需要的 ctx 都在这里了
  * OUT:
  *    @odp_actions: 存储翻译后的 action 结果
- *    @wc: 存储翻译后的 flow wildcard 结果
+ *    @wc: 存储翻译后的 flow wildcard 结果, 到数据面 megaflow 需要的
+ *
  * */
 static void
 upcall_xlate(struct udpif *udpif, struct upcall *upcall,
@@ -1261,7 +1266,7 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
              * upcalls using recirculation ID for which no context can be
              * found).  We may still execute the flow's actions even if we
              * don't install the flow. */
-            upcall->recirc = recirc_id_node_from_state(xin.frozen_state);
+            upcall->recirc = recirc_id_node_from_state(xin.frozen_state); // upcall_receive 里没有设置 recirc, 所以这里设置上
             upcall->have_recirc_ref = recirc_id_node_try_ref_rcu(upcall->recirc);
         }
     } else {
