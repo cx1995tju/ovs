@@ -77,6 +77,7 @@ enum nat_action_e {
     NAT_ACTION_DST_PORT = 1 << 3,
 };
 
+// 记录了可以使用的地址范围, 和要做 SNAT or DNAT
 struct nat_action_info_t {
     union ct_addr min_addr;
     union ct_addr max_addr;

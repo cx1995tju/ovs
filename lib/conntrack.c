@@ -12,6 +12,47 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * 相关文件
+ * lib/conntrack.h:               ct 模块提供给外部的接口
+ *
+ * lib/conntrack.c:               ct 功能的实现
+ * lib/conntrack-private.h 
+ * 
+ * lib/conntrack-tcp.c            ct 模块要支持多个协议的, 一些 protocol specific 的代码被分离到其他文件了
+ * lib/conntrack-icmp.c    
+ * lib/conntrack-other.c   
+ *
+ * lib/conntrack-tp.c             为不同的协议提供 timeout policy 相关的通用机制
+ * lib/conntrack-tp.h      
+ *
+ * 
+ * 核心数据结构
+ * - struct conntrack             // 全局的 pmd share 的 conntrack ctx, 是 root struct
+ * - struct conn                  // 核心的核心, 一切都是这个结构的增删改查, 核心目标理解这个结构每个字段的增删改查
+   - struct conn_key
+ * - struct conn_lookup_ctx       // 在处理 pkt 的过程中, 会用 pkt 信息去查找 conn 的, 这里会记载一些相关信息
+ * - struct ct_l4_proto l4_protos: 调用底层 protocol specific 代码
+ * 
+ * 
+ * 外部接口
+ * - 全局变量
+ * - non-static 函数:
+ *   - conntrack_execute()
+ *   - conntrack_clear()
+ * - 清理线程: clean_thread_main
+ *
+ * 
+ * 模块初始化和清理
+ * - init 函数: conntrack_init()
+ * - cleanup 函数: conntrack_destroy()
+ *
+ *
+ * conn 的删除: clean_thread_main 线程
+ *
+ *
+ * 关于 zone limit, 通过 ovs-appctl 可以限制 zone 的 conn 总数. 而 zone 可以用
+ * 来隔离不同的 vm. 即限制了 vm 的连接总数.
  */
 
 #include <config.h>
@@ -50,11 +91,13 @@ COVERAGE_DEFINE(conntrack_l4csum_err);
 COVERAGE_DEFINE(conntrack_lookup_natted_miss);
 
 struct conn_lookup_ctx {
-    struct conn_key key;
+    struct conn_key key;     // hash 查找后, 用这个来 compare
     struct conn *conn;
-    uint32_t hash;
+    uint32_t hash;           // 查 hash table
     bool reply;
-    bool icmp_related;
+    bool icmp_related;       // conn_key_extract 里获取的. 如果在处理的是 icmp
+			     // error 报文. 会从其 payload 里提取原始报文信息.
+			     // 同时 ctx 里会设置该 flag. ref: extract_l4
 };
 
 enum ftp_ctl_pkt {
@@ -85,11 +128,14 @@ struct zone_limit {
     struct conntrack_zone_limit czl;
 };
 
+// key 相关
 static bool conn_key_extract(struct conntrack *, struct dp_packet *,
                              ovs_be16 dl_type, struct conn_lookup_ctx *,
                              uint16_t zone);
 static uint32_t conn_key_hash(const struct conn_key *, uint32_t basis);
 static void conn_key_reverse(struct conn_key *);
+
+// conn 的增删改
 static bool valid_new(struct dp_packet *pkt, struct conn_key *);
 static struct conn *new_conn(struct conntrack *ct, struct dp_packet *pkt,
                              struct conn_key *, long long now,
@@ -102,13 +148,19 @@ static enum ct_update_res conn_update(struct conntrack *ct, struct conn *conn,
                                       struct conn_lookup_ctx *ctx,
                                       long long now);
 static bool conn_expired(struct conn *, long long now);
+
+
+// action
 static void set_mark(struct dp_packet *, struct conn *,
                      uint32_t val, uint32_t mask);
 static void set_label(struct dp_packet *, struct conn *,
                       const struct ovs_key_ct_labels *val,
                       const struct ovs_key_ct_labels *mask);
+
+// ct 的删除
 static void *clean_thread_main(void *f_);
 
+// 特定 action 或者 protocol-specific
 static bool
 nat_get_unique_tuple(struct conntrack *ct, const struct conn *conn,
                      struct conn *nat_conn,
@@ -292,7 +344,7 @@ struct conntrack *
 conntrack_init(void)
 {
     static struct ovsthread_once setup_l4_once = OVSTHREAD_ONCE_INITIALIZER;
-    struct conntrack *ct = xzalloc(sizeof *ct);
+    struct conntrack *ct = xzalloc(sizeof *ct); // root struct
 
     /* This value can be used during init (e.g. timeout_policy_init()),
      * set it first to ensure it is available.
@@ -320,8 +372,8 @@ conntrack_init(void)
     atomic_init(&ct->n_conn_limit, DEFAULT_N_CONN_LIMIT);
     atomic_init(&ct->tcp_seq_chk, true);
     latch_init(&ct->clean_thread_exit);
-    ct->clean_thread = ovs_thread_create("ct_clean", clean_thread_main, ct);
-    ct->ipf = ipf_init();
+    ct->clean_thread = ovs_thread_create("ct_clean", clean_thread_main, ct);  // 用来清理过期 ct 的
+    ct->ipf = ipf_init(); // 处理 ip frag 的
 
     /* Initialize the l4 protocols. */
     if (ovsthread_once_start(&setup_l4_once)) {
@@ -444,6 +496,7 @@ zone_limit_delete(struct conntrack *ct, uint16_t zone)
     return 0;
 }
 
+// conn clean common
 static void
 conn_clean_cmn(struct conntrack *ct, struct conn *conn)
     OVS_REQUIRES(ct->ct_lock)
@@ -467,10 +520,11 @@ static void
 conn_clean(struct conntrack *ct, struct conn *conn)
     OVS_REQUIRES(ct->ct_lock)
 {
+	// 只能用于 CT_CONN_TYPE_DEFAULT 类型的 conn
     ovs_assert(conn->conn_type == CT_CONN_TYPE_DEFAULT);
 
     conn_clean_cmn(ct, conn);
-    if (conn->nat_conn) {
+    if (conn->nat_conn) { // DEFAULT 的 conn 可能有一个关联的 nat_conn, 那么也清理掉. 所以这个函数是没有带 xxx_one 的
         uint32_t hash = conn_key_hash(&conn->nat_conn->key, ct->hash_basis);
         cmap_remove(&ct->conns, &conn->nat_conn->cm_node, hash);
     }
@@ -485,7 +539,7 @@ conn_clean_one(struct conntrack *ct, struct conn *conn)
     OVS_REQUIRES(ct->ct_lock)
 {
     conn_clean_cmn(ct, conn);
-    if (conn->conn_type == CT_CONN_TYPE_DEFAULT) {
+    if (conn->conn_type == CT_CONN_TYPE_DEFAULT) { // 不会去检查是否有 nat_conn 的, 只会清理自己
         ovs_list_remove(&conn->exp_node);
         conn->cleaned = true;
         atomic_count_dec(&ct->n_conn);
@@ -540,8 +594,10 @@ conntrack_destroy(struct conntrack *ct)
 }
 
 
-// intput: key
-// output: conn
+// intput: key, hash. 用 hash 查找后和 key 比较. 另外用 now 判断是否过期了
+// output: conn, is_reply
+//
+// XXX: 这里做 lookup 的时候, 不仅仅用 key 来 look, 也用 rev_key 来 look_up
 static bool
 conn_key_lookup(struct conntrack *ct, const struct conn_key *key,
                 uint32_t hash, long long now, struct conn **conn_out,
@@ -583,7 +639,14 @@ conn_lookup(struct conntrack *ct, const struct conn_key *key,
     return conn_key_lookup(ct, key, hash, now, conn_out, reply);
 }
 
-// 设置 ct 相关的 metadata
+// 设置 ct 相关的 metadata. 使用提取到的 conn 等信息
+// - ct_zone: zone 来自于 datapath flow action
+// - ct_state: 根据 conn 分析 pkt 后来设置
+// - ct_mark: 来自 conn
+// - ct_lable: 来自 conn
+// - ct_orig_tuple: 提取自 conn 的 key
+//
+// helper: 设置 pkt, 返回一些辅助信息: key, alg_exp 等
 static void
 write_ct_md(struct dp_packet *pkt, uint16_t zone, const struct conn *conn,
             const struct conn_key *key, const struct alg_exp_node *alg_exp)
@@ -666,6 +729,7 @@ is_ftp_ctl(const enum ct_alg_ctl_type ct_alg_ctl)
     return ct_alg_ctl == CT_ALG_CTL_FTP;
 }
 
+// 分析 pkt 来获取 ct_alg_ctl_type
 static enum ct_alg_ctl_type
 get_alg_ctl_type(const struct dp_packet *pkt, ovs_be16 tp_src, ovs_be16 tp_dst,
                  const char *helper)
@@ -726,18 +790,25 @@ handle_alg_ctl(struct conntrack *ct, const struct conn_lookup_ctx *ctx,
     }
 }
 
+// pat: port address translation
 static void
 pat_packet(struct dp_packet *pkt, const struct conn *conn)
 {
+	// 进到这里来设置的时候, 信息都被收集在 conn 里了
     if (conn->nat_action & NAT_ACTION_SRC) {
         if (conn->key.nw_proto == IPPROTO_TCP) {
             struct tcp_header *th = dp_packet_l4(pkt);
-            packet_set_tcp_port(pkt, conn->rev_key.dst.port, th->tcp_dst);
+	    // SNAT: A->C => B->C
+	    // conn: 里记录的信息是: key: A->C, rev_key: C->B
+            packet_set_tcp_port(pkt, conn->rev_key.dst.port, th->tcp_dst); // rev_key 的 dst port 是当前方向的 src port. 原始的 dst 不改.
         } else if (conn->key.nw_proto == IPPROTO_UDP) {
             struct udp_header *uh = dp_packet_l4(pkt);
             packet_set_udp_port(pkt, conn->rev_key.dst.port, uh->udp_dst);
         }
     } else if (conn->nat_action & NAT_ACTION_DST) {
+	    // DNAT: 对于 DNAT: A->C => A->B
+	    // key: A->C
+	    // rev_key: B->A
         if (conn->key.nw_proto == IPPROTO_TCP) {
             packet_set_tcp_port(pkt, conn->rev_key.dst.port,
                                 conn->rev_key.src.port);
@@ -748,6 +819,7 @@ pat_packet(struct dp_packet *pkt, const struct conn *conn)
     }
 }
 
+// related 为 true: 表示当前处理的是 icmp error 报文, 那么 pat_packet 就不需要做了
 static void
 nat_packet(struct dp_packet *pkt, const struct conn *conn, bool related)
 {
@@ -755,6 +827,7 @@ nat_packet(struct dp_packet *pkt, const struct conn *conn, bool related)
         pkt->md.ct_state |= CS_SRC_NAT;
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
+	    // 修改 saddr
             packet_set_ipv4_addr(pkt, &nh->ip_src,
                                  conn->rev_key.dst.addr.ipv4);
         } else {
@@ -770,6 +843,7 @@ nat_packet(struct dp_packet *pkt, const struct conn *conn, bool related)
         pkt->md.ct_state |= CS_DST_NAT;
         if (conn->key.dl_type == htons(ETH_TYPE_IP)) {
             struct ip_header *nh = dp_packet_l3(pkt);
+	    // 修改 daddr
             packet_set_ipv4_addr(pkt, &nh->ip_dst,
                                  conn->rev_key.src.addr.ipv4);
         } else {
@@ -970,7 +1044,32 @@ ct_verify_helper(const char *helper, enum ct_alg_ctl_type ct_alg_ctl)
     }
 }
 
-// 处理 conn 找不到的情况, 也就是去创建 conn 了
+// 处理 conn 找不到的情况, 也就是去创建 conn 了. 一般就是新报文咯, 所以要去创建 conn 了
+// ct: per-datapath
+// pkt:
+// ctx:
+//
+// commit: ct action 是否有 comit 参数
+// now: 用来判断是否超时过期的
+// nat_action_info: nat 信息(前提是有 nat action)
+// helper/alg_exp/ct_alg_ctl: 支持 ftp 等场景
+// tp_id ????
+//
+// 根据 pkt 和 ct action 来创建 conn:
+// - 当然要做一些检查:
+//   - 报文合法性
+//   - zone limit
+//   - conntrack limit
+// - conn:
+//   - 保存 ctx 里的 key
+//   - 计算一个 rev key, 不同报文这个是不一样的
+//   - nat 的特殊处理:
+//     - 一个 nat ct 会创建两个 conn
+//     - nat 相关的 conn 里的 key 和 rev key 的设置也比较特殊
+//     - 顺便把这个 new packet 的 nat 给做掉: nat_get_unique_tuple(), nat_packet()
+//
+// ct_state 的设置: +new
+//
 static struct conn *
 conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                struct conn_lookup_ctx *ctx, bool commit, long long now,
@@ -979,9 +1078,10 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                enum ct_alg_ctl_type ct_alg_ctl, uint32_t tp_id)
     OVS_REQUIRES(ct->ct_lock)
 {
-    struct conn *nc = NULL;
-    struct conn *nat_conn = NULL;
+    struct conn *nc = NULL; // new conn
+    struct conn *nat_conn = NULL; // nat conn
 
+    // 如果是 new 报文, 那么这里会去检查合法性
     if (!valid_new(pkt, &ctx->key)) { // 非法 new 报文, 报文合法性检查
         pkt->md.ct_state = CS_INVALID;
         return nc;
@@ -992,10 +1092,18 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
     // - force flag 的特殊处理
     pkt->md.ct_state = CS_NEW;
 
-    if (alg_exp) { // 我们的卸载不支持
+    if (alg_exp) {
         pkt->md.ct_state |= CS_RELATED;
     }
 
+    // 主体逻辑, 创建新的 conn
+    // 如果一个 pkt 第一次进入 ct 还不携带 commit action 的话, 那么这里直接跳过了.
+    // 那么过 ct 是没有意义的. 当然如果一个包已经有了 conn 的话, 那么携带 commit 也是没有意义的. 
+    // 因为不会走到这里的 (conn_not_found()).
+    //
+    // 主体逻辑如下:
+    // - zone/ct 层次的 limit 检查
+    // - 创建 new conn 并赋值
     if (commit) { // 有 commit 要创建新的
         struct zone_limit *zl = zone_limit_lookup_or_default(ct,
                                                              ctx->key.zone);
@@ -1010,10 +1118,11 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
             return nc;
         }
 
+	// %tcp_new_conn
         nc = new_conn(ct, pkt, &ctx->key, now, tp_id);
         memcpy(&nc->key, &ctx->key, sizeof nc->key);
         memcpy(&nc->rev_key, &nc->key, sizeof nc->rev_key);
-        conn_key_reverse(&nc->rev_key);
+        conn_key_reverse(&nc->rev_key); // reverse it
 
         if (ct_verify_helper(helper, ct_alg_ctl)) {
             nc->alg = nullable_xstrdup(helper);
@@ -1028,6 +1137,7 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
 
         if (nat_action_info) {
             nc->nat_action = nat_action_info->nat_action;
+	    // nat 后会有个新的连接, 为这个连接也创建 conn
             nat_conn = xzalloc(sizeof *nat_conn);
 
             if (alg_exp) {
@@ -1038,10 +1148,50 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                     nc->rev_key.src.addr = alg_exp->alg_nat_repl_addr;
                     nc->nat_action = NAT_ACTION_DST;
                 }
-            } else {
+            } else { // commit 的包就要做 nat, 那么也就是选择 ip/port 咯
                 memcpy(nat_conn, nc, sizeof *nat_conn);
+		// memcpy 后, 还没有做 NAT 的
+		// 对于 SNAT: A->C => B->C
+		// conn:
+		//   - key:     A->C
+		//   - rev_key: C->A
+		// nat_conn:
+		//   - key:     A->C
+		//   - rev_key: C->A
+		//
+		// 对于 DNAT: A->C => A->B
+		// conn:
+		//   - key:     A->C
+		//   - rev_key: C->A
+		// nat_conn:
+		//   - key:     A->C
+		//   - rev_key: C->A
+
+
                 bool nat_res = nat_get_unique_tuple(ct, nc, nat_conn,
                                                     nat_action_info);
+		// nat_get_unique_tuple 会将选择的地址信息保存到 nat_conn 的 rev_key 里
+		// 
+		//
+		// 对于 SNAT:  A->C => B->C
+		// conn:
+		// - key: A->C
+		// - rev_key: C->A
+		//
+		// nat_conn:
+		// - key: A->C
+		// - rev_key: C->B
+		//
+		//
+		// 对于 DNAT: A->C => A->B
+		// conn:
+		// - key: A->C
+		// - rev_key: C->A
+		//
+		// nat_conn:
+		// - key: A->C
+		// - rev_key: B->A
+		//
 
                 if (!nat_res) {
                     goto nat_res_exhaustion;
@@ -1050,23 +1200,73 @@ conn_not_found(struct conntrack *ct, struct dp_packet *pkt,
                 /* Update nc with nat adjustments made to nat_conn by
                  * nat_get_unique_tuple(). */
                 memcpy(nc, nat_conn, sizeof *nc);
+		// 这里用nat_conn 更新了原有的 conn 那么现在
+		//
+		//
+		// 对于 SNAT:  A->C => B->C
+		// conn:
+		// - key: A->C
+		// - rev_key: C->B
+		//
+		// nat_conn:
+		// - key: A->C
+		// - rev_key: C->B
+		//
+		//
+		// 对于 DNAT: A->C => A->B
+		// conn:
+		// - key: A->C
+		// - rev_key: B->A
+		//
+		// nat_conn:
+		// - key: A->C
+		// - rev_key: B->A
+		//
             }
 
-            nat_packet(pkt, nc, ctx->icmp_related);
+	    /* XXX: 关于 NAT, 不仅仅有原始连接的 conn 还要创建一个 nat_conn 也插入进去得到管理
+	     *
+	     *
+	     * */
+	    // 第一次进来 icmp_related 从 ctx 里获取, 在 pkt metadata 里还没有
+            nat_packet(pkt, nc, ctx->icmp_related); // 修改 packet
             memcpy(&nat_conn->key, &nc->rev_key, sizeof nat_conn->key);
             memcpy(&nat_conn->rev_key, &nc->key, sizeof nat_conn->rev_key);
+            // XXX: XXX: XXX: XXX: XXX: 这里是 conn 和 nat_conn 最终的 key, rev_key
+	    // 这里做了交换, 那么现在
+	    //
+	    // 对于 SNAT:  A->C => B->C
+	    // conn:
+	    // - key: A->C
+	    // - rev_key: C->B
+	    //
+	    // nat_conn:
+	    // - key: C->B
+	    // - rev_key: A->C
+	    //
+	    //
+	    // 对于 DNAT: A->C => A->B
+	    // conn:
+	    // - key: A->C
+	    // - rev_key: B->A
+	    //
+	    // nat_conn:
+	    // - key: B->A
+	    // - rev_key: A->C
+	    //
+	    // 至此 nat_conn 和 conn 就是完全反过来了. 所以 nat_conn 是做 UN_NAT
             nat_conn->conn_type = CT_CONN_TYPE_UN_NAT;
             nat_conn->nat_action = 0;
             nat_conn->alg = NULL;
             nat_conn->nat_conn = NULL;
-            uint32_t nat_hash = conn_key_hash(&nat_conn->key, ct->hash_basis);
+            uint32_t nat_hash = conn_key_hash(&nat_conn->key, ct->hash_basis); // nat_conn 要计算 hash 值的
             cmap_insert(&ct->conns, &nat_conn->cm_node, nat_hash);
         }
 
-        nc->nat_conn = nat_conn;
+        nc->nat_conn = nat_conn; // 建立两个 conn 的关系
         ovs_mutex_init_adaptive(&nc->lock);
         nc->conn_type = CT_CONN_TYPE_DEFAULT;
-        cmap_insert(&ct->conns, &nc->cm_node, ctx->hash);
+        cmap_insert(&ct->conns, &nc->cm_node, ctx->hash); // conn 用的还是 nat 前的 hash 值
         atomic_count_inc(&ct->n_conn);
         ctx->conn = nc; /* For completeness. */
         if (zl) {
@@ -1170,6 +1370,7 @@ handle_nat(struct dp_packet *pkt, struct conn *conn,
     }
 }
 
+// Question: ct_orig_tuple 的准确含义
 static bool
 check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
                  struct conn_lookup_ctx *ctx_in, long long now,
@@ -1191,6 +1392,7 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
     struct conn_key key;
     memset(&key, 0 , sizeof key);
 
+    // 要用 orig 信息重构 key
     if (ctx_in->key.dl_type == htons(ETH_TYPE_IP)) {
         key.src.addr.ipv4 = pkt->md.ct_orig_tuple.ipv4.ipv4_src;
         key.dst.addr.ipv4 = pkt->md.ct_orig_tuple.ipv4.ipv4_dst;
@@ -1306,22 +1508,37 @@ process_one_fast(uint16_t zone, const uint32_t *setmark,
  *
  * @natted: 是否要做 nat
  * 
- * 考虑 SNAT: A->B 被 SNAT 为 C->B. 那么 conn 的两个方向就是: A->B / B->C
- * - A -> B 被 SNAT 为了 C->B. 当这个 pkt 来了后有两个问题:
- *   - 不知道之前的 src 是 A
- *   - C->B 也不在 CT 里 track. 
- *   所以就将其反过来查找, 然后将查找结果的再反过来一次.
+ * ref: conn_not_found 中关于 nat 的 特殊处理
+ *
+ * 对于 SNAT:  A->C => B->C
+ * conn:
+ * - key: A->C
+ * - rev_key: C->B
+ *
+ * nat_conn:
+ * - key: C->B
+ * - rev_key: A->C
+ *
+ * 如果 natted 是 true, 已经做过 nat 了, 那么这里的 pkt 就是 B->C 了. 直接用 B->C 是 lookup 不到 conn 的.
+ * 所以这里 reverse 后用 C->B 来查找 conn, 然后参考 conn_key_lookup 的实现. 这样就查找到了 conn 了. 
+ * 注意: lookup 的 hash 值还是 A->C 计算出来的. 所以查找到的还是 conn
  *
  *
- * 考虑 DNAT: A->B 被 DNAT 为 A->C. 那么 conn 的两个方向就是: A->B / C->B
- * -  A->B 被 DNAT 为 A->C 后, 这个 pkt 来了后有两个问题:
- *    - 不知道原始的 dst 是 B
- *    - A->C 也不在 CT 里 track.
- *    所以就将其反过来查找, 然后将查找结果的再反过来一次.
+ * 对于 DNAT: A->C => A->B
+ * conn:
+ * - key: A->C
+ * - rev_key: B->A
+ *
+ * nat_conn:
+ * - key: B->A
+ * - rev_key: A->C
+ *
+ * 如果 natted 是 true, 已经做过 nat 了, 那么这里的 pkt 就是 A->B 了. 直接用 A->B 是 lookup 不到 conn 的.
+ * 所以这里 reverse 后用 B->A 来查找 conn, 然后参考 conn_key_lookup 的实现.  这样就查找到了 conn 了
+ * 注意: lookup 的 hash 值还是 A->C 计算出来的. 所以查找到的还是 conn
  *
  *
- * 考虑 SNAT + DNAT: A->B 被 SNAT + DNAT 为 C->D. 那么 conn 两个方向就是: A->B / D->C
- * 所以和前面一样, 也要反过来查找.
+ * 综上, 对于 nat 报文, 找到的应该是 nat_conn, 且 ctx->reply 是 false
  *
  * */
 static void
@@ -1337,6 +1554,7 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
     }
 
     //  conn, reply 是查找结果
+    // 这一次查找用的 ctx 里的 hash 和 key. 即用的是原始报文的 hash 和 key
     conn_key_lookup(ct, &ctx->key, ctx->hash, now, &ctx->conn, &ctx->reply);
 
     if (natted) {
@@ -1370,9 +1588,11 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
  *
  *  一些特殊处理:
  *  - conn 的多次查找
- *    - initial_conn_lookup. 用 pkt 里提取的 ctx 信息来做第一次查找. 这里的查找针对已经做过 nat 的报文要特殊处理
- *    - force 情况下在锁的保护下重新找一次. ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
- *    - check_orig_tuple 对于合法的 非 nat 场景通过 ct_orgi_tuple 再次查找. 因为可能是 reply 方向的报文
+ *    - 第一次查找: initial_conn_lookup. 用 pkt 里提取的 ctx 信息(原始报文的 hash 和 key)来做第一次查找. 这里的查找针对已经做过 nat 的报文要特殊处理
+ *    - 第二次查找: force 情况下在锁的保护下重新找一次. ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
+ *    - 第三次查找: 针对 UN_NAT 场景的第三次查找
+ *    - 第四次查找: check_orig_tuple 使用 orig 信息重新查找一次. 前提是有 orig 信息, 而有 orig 信息, 肯定是已经过过 ct 了
+ *    - 第五次查找: conn_not_found 里创建新的 conn 之前再查找一次. ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
  *  - force 的特殊处理:
  *    - 如果是 reply 方向的 pkt 带了 force 那么要将原始方向的 conn 清除掉. 然后走 conn_not_found() 路径
  *  - nat 的特殊处理
@@ -1401,9 +1621,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     } // 那么后续 state 就完全重新计算了 ???
 
     bool create_new_conn = false;
-    // 第一次查找
     // 第一次进入 ct 的 zone, ct_state 肯定是 0
-    // XXX:
     initial_conn_lookup(ct, ctx, now, !!(pkt->md.ct_state &
                                          (CS_SRC_NAT | CS_DST_NAT)));
     struct conn *conn = ctx->conn;
@@ -1421,11 +1639,12 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
     }
 
     if (OVS_LIKELY(conn)) { // nat 场景会创建两个 conn, 其中一个 是 nat_conn 其 type 就是 CT_CONN_TYPE_UN_NAT
-        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) { // ref: conn_not_found. 为 nat conn 创建 ct 的时候同步创建了反向的 conn
+        if (conn->conn_type == CT_CONN_TYPE_UN_NAT) { // ref: conn_not_found. 为 nat 创建 ct 的时候同步创建了反向的 nat_conn. 这里表示反向报文过来了, 要做 unant 了
 
             ctx->reply = true;
             struct conn *rev_conn = conn;  /* Save for debugging. */
             uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis); // 用 rev_key 去重新找反向的信息 ???
+	    // 这一次查找的 hash 值是 rev_key 计算出来的. 因为当前 ctx 对应的 pkt 是 UN_NAT 报文, 是反向的
             conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ??? nat 场景要用 rev_key 去找到真正的 conn ?
 
             if (!conn) {
@@ -1455,7 +1674,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
         }
         if (nat_action_info && !create_new_conn) {
-		// nat 处理
+		// 非 new  pkt 的 nat 处理
             handle_nat(pkt, conn, zone, ctx->reply, ctx->icmp_related);
         }
     } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 原始方向没有找到 conn. 里面会排除 nat 场景后用orig tuple 再查找一次
@@ -1487,7 +1706,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         }
         ovs_rwlock_unlock(&ct->resources_lock);
 
-        ovs_mutex_lock(&ct->ct_lock);
+        ovs_mutex_lock(&ct->ct_lock); // 上锁了. 这是一个多 pmd共享的结构, 上锁不影响性能么?
+				      // ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
         if (!conn_lookup(ct, &ctx->key, now, NULL, NULL)) { // 为什么又 lookup 一次
             conn = conn_not_found(ct, pkt, ctx, commit, now, nat_action_info,
                                   helper, alg_exp, ct_alg_ctl, tp_id);
@@ -1495,6 +1715,7 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
         ovs_mutex_unlock(&ct->ct_lock);
     }
 
+    // conn 里已经收集了足够的信息, 用来修改 pkt 了
     // 为报文设置 ct 相关 metadata, 这里会设置 tracked
     write_ct_md(pkt, zone, conn, &ctx->key, alg_exp);
 
@@ -1728,6 +1949,7 @@ clean_thread_main(void *f_)
 /* 'Data' is a pointer to the beginning of the L3 header and 'new_data' is
  * used to store a pointer to the first byte after the L3 header.  'Size' is
  * the size of the packet beyond the data pointer. */
+// 基本检查, 然后提取 protocol 和 src ip
 static inline bool
 extract_l3_ipv4(struct conn_key *key, const void *data, size_t size,
                 const char **new_data, bool validate_checksum)
@@ -1970,7 +2192,7 @@ extract_l4_icmp(struct conn_key *key, const void *data, size_t size,
         key->src.icmp_type = icmp->icmp_type;
         key->dst.icmp_type = reverse_icmp_type(icmp->icmp_type);
         break;
-    case ICMP4_DST_UNREACH:
+    case ICMP4_DST_UNREACH: // icmp ERROR 报文
     case ICMP4_TIME_EXCEEDED:
     case ICMP4_PARAM_PROB:
     case ICMP4_SOURCEQUENCH:
@@ -2000,11 +2222,11 @@ extract_l4_icmp(struct conn_key *key, const void *data, size_t size,
         key->src = inner_key.src;
         key->dst = inner_key.dst;
         key->nw_proto = inner_key.nw_proto;
-        size_t check_len = ICMP_ERROR_DATA_L4_LEN;
+        size_t check_len = ICMP_ERROR_DATA_L4_LEN; // 因为 8 Byte 足够提取到 l4 port 信息了
 
         ok = extract_l4(key, l4, tail - l4, NULL, l3, false, &check_len);
         if (ok) {
-            conn_key_reverse(key);
+            conn_key_reverse(key); // 因为 icmp error 携带的是 orgi dir 的报文信息
             *related = true;
         }
         return ok;
@@ -2115,23 +2337,39 @@ extract_l4_icmp6(struct conn_key *key, const void *data, size_t size,
  *
  * If 'related' is NULL, it means that we're already parsing a header nested
  * in an ICMP error.  In this case, we skip the checksum and some length
- * validations. */
+ * validations.
+ *
+ * related 这个字段除了作为返回值之外, 还承担了输入信息, 即:
+ * - related == NULL, 表示当前已经在处理 icmp payload 里的原始报文了, 不会再递归处理 icmp 了
+ * - 所以对于 TCP, UDP 等进入到这里的时候 related != NULL, 所以这里的 check_l4_tcp 等函数其实不会调用. (? 是因为 miniflow_extract 的时候都 check 过了?)
+ *
+ *
+ *
+ * 提取 l4 信息: 不同报文的处理有不同
+ *
+ * tcp/udp: 正常提取 port 就是了
+ *
+ * icmp 消息报文: 提取 icmp_type 和 icmp_id. 不过 dst 和 src 比较特殊. ref: extract_l4_icmp
+ *
+ * icmp error 报文: 本质是提取其 payload 里的报文的信息
+ * */
 static inline bool
 extract_l4(struct conn_key *key, const void *data, size_t size, bool *related,
            const void *l3, bool validate_checksum, size_t *chk_len)
 {
+	// 如果是 icmp error 报文后从 icmp payload 里提取原始报文相关信息
     if (key->nw_proto == IPPROTO_TCP) {
         return (!related || check_l4_tcp(key, data, size, l3,
-                validate_checksum))
-               && extract_l4_tcp(key, data, size, chk_len);
+                validate_checksum)) 
+               && extract_l4_tcp(key, data, size, chk_len); // 通过检查后就提取 l4 tcp 信息
     } else if (key->nw_proto == IPPROTO_UDP) {
         return (!related || check_l4_udp(key, data, size, l3,
                 validate_checksum))
-               && extract_l4_udp(key, data, size, chk_len);
+               && extract_l4_udp(key, data, size, chk_len); // 通过检查后提取 l4 udp
     } else if (key->dl_type == htons(ETH_TYPE_IP)
                && key->nw_proto == IPPROTO_ICMP) {
         return (!related || check_l4_icmp(data, size, validate_checksum))
-               && extract_l4_icmp(key, data, size, related, chk_len);
+               && extract_l4_icmp(key, data, size, related, chk_len); // icmp 要特殊处理的, 如果是 error 报文, 要从 payload 提取原始信息. 设置 related
     } else if (key->dl_type == htons(ETH_TYPE_IPV6)
                && key->nw_proto == IPPROTO_ICMPV6) {
         return (!related || check_l4_icmp6(key, data, size, l3,
@@ -2468,6 +2706,7 @@ static void
 store_addr_to_key(union ct_addr *addr, struct conn_key *key,
                   uint16_t action)
 {
+	// SNAT. 这里选出来的 addr 是 src addr.
     if (action & NAT_ACTION_SRC) {
         key->dst.addr = *addr;
     } else {
@@ -2568,6 +2807,9 @@ nat_get_unique_tuple(struct conntrack *ct, const struct conn *conn,
                     &min_dport, &max_dport);
 
 another_round:
+    // 将选择出来的 addr 保存到 rev_key 里
+    // SNAT: 那么 rev_key 的 dst 被改了
+    // DNAT: 那么 rev_key 的 src 被改了
     store_addr_to_key(&curr_addr, &nat_conn->rev_key,
                       nat_info->nat_action);
 

@@ -127,13 +127,13 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
     uint32_t pkt_mark;          /* Packet mark. */
     uint8_t  ct_state;          /* Connection state. */ // %OVS_CS_F_NEW, %CS_TRACKED, ref: write_ct_md() ref: packets.h::CS_STATES
     bool ct_orig_tuple_ipv6;
-    uint16_t ct_zone;           /* Connection zone. */  // ct zone action 设置的, conntrack_execute() -> wrte_ct_md() %OVS_ACTION_ATTR_CT / OVS_CT_ATTR_ZONE, 目的是实现租户隔离的, 默认值是 0
+    uint16_t ct_zone;           /* Connection zone. */  // ct zone action 设置的, conntrack_execute() -> wrte_ct_md() %OVS_ACTION_ATTR_CT / OVS_CT_ATTR_ZONE, 目的是实现租户隔离的, 默认值是 0. zone 有 limit 限制, 可以限制某个 zone 的最大连接数, 所以用来实现租户隔离比较好.
     uint32_t ct_mark;           /* Connection mark. */  // ct action 设置
     ovs_u128 ct_label;          /* Connection label. */ // ct action 设
     union flow_in_port in_port; /* Input port. */ // ref: patch_port_output() in_port 会被修改的, orig_in_port 会被保留
     odp_port_t orig_in_port;    /* Originating in_port for tunneled packets */
     struct conn *conn;          /* Cached conntrack connection. */
-    bool reply;                 /* True if reply direction. */
+    bool reply;                 /* True if reply direction. */ // ref: set_cached_conn
     bool icmp_related;          /* True if ICMP related. */
 );
 
@@ -146,6 +146,23 @@ PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline0,
 /*      response is sent to an UDP packet). */
 /*    - 对于 related connection, 比如 ftp data connection, original tuple 包含 */
 /*      parent connection(比如: FTP control connection) 的原始方向头部. */
+
+/* For non-committed non-related connections the conntrack original direction */
+/* tuple fields always have the same values as the corresponding headers in the */
+/* packet itself. */
+
+/* For any other packets of a committed connection the conntrack original */
+/* direction tuple fields reflect the values from that initial non-committed */
+/* non-related packet, and thus may be different from the actual packet headers, */
+/* - as the actual packet headers may be in reverse direction (for reply */
+/*   packets), */
+/* - transformed by NAT (when nat option was applied to the connection), */
+/* - or be of different protocol (i.e., when an ICMP response is sent to an UDP */
+/*   packet). */
+/* - In case of related connections, e.g., an FTP data connection, the original */
+/*   direction tuple contains the original direction headers from the parent */
+/*   connection, e.g., an FTP control connection. */
+
 PADDED_MEMBERS_CACHELINE_MARKER(CACHE_LINE_SIZE, cacheline1,
     union {                     /* Populated only for non-zero 'ct_state'. */
         struct ovs_key_ct_tuple_ipv4 ipv4;

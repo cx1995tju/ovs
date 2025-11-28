@@ -50,6 +50,9 @@ BUILD_ASSERT_DECL(sizeof(struct ct_endpoint) == sizeof(union ct_addr) + 4);
 
 /* Changes to this structure need to be reflected in conn_key_hash()
  * and conn_key_cmp(). */
+// 关于 icmp 报文的 src 和 dst, ref: extract_l4_icmp
+//
+// 对于 icmp 报文, 这里的 src, dst 是从 icmp paylaod 的提取的
 struct conn_key {
     struct ct_endpoint src;
     struct ct_endpoint dst;
@@ -88,14 +91,34 @@ struct alg_exp_node {
 
 enum OVS_PACKED_ENUM ct_conn_type {
     CT_CONN_TYPE_DEFAULT,
-    CT_CONN_TYPE_UN_NAT,
+    CT_CONN_TYPE_UN_NAT,  // 做 nat 的时创建的额外的 conn. ref: conn_not_found
 };
 
 // XXX: 核心的核心结构
+// 关于 NAT 中 key 和 rev_key 的说明: ref: pat_packet(), nat_packet()
+//
+// 对于 SNAT:  A->C => B->C
+// conn:
+// - key: A->C
+// - rev_key: C->B
+//
+// nat_conn:
+// - key: C->B
+// - rev_key: A->C
+//
+//
+// 对于 DNAT: A->C => A->B
+// conn:
+// - key: A->C
+// - rev_key: B->A
+//
+// nat_conn:
+// - key: B->A
+// - rev_key: A->C
 struct conn {
     /* Immutable data. */
-    struct conn_key key; // 5-tuple
-    struct conn_key rev_key;
+    struct conn_key key; // 5-tuple, ref: conn_not_found
+    struct conn_key rev_key; // 做 lookup 的时候, 不仅仅用 key 来 look, 也用 rev_key 来 look_up
     struct conn_key parent_key; /* Only used for orig_tuple support. */ // 支持 ftp 这种功能
     struct ovs_list exp_node; // 用于连接 跟踪扩展的 list
     struct cmap_node cm_node; // 连接到 hash 表
@@ -189,9 +212,10 @@ enum ct_timeout {
     N_CT_TM
 };
 
+// per-datapath 的结构. ovs-dpdk 里所有 pmd 共享一个该结构
 struct conntrack {
     struct ovs_mutex ct_lock; /* Protects 2 following fields. */
-    struct cmap conns OVS_GUARDED;
+    struct cmap conns OVS_GUARDED;                     // 组织 ct 的 hash 表
     struct ovs_list exp_lists[N_CT_TM] OVS_GUARDED;
     struct hmap zone_limits OVS_GUARDED;
     struct hmap timeout_policies OVS_GUARDED;
