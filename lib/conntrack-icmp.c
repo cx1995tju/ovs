@@ -59,6 +59,10 @@ icmp_conn_update(struct conntrack *ct, struct conn *conn_,
         ret = CT_UPDATE_VALID_NEW;
     }
 
+    // 大部分情况没有任何工作需要做, 就是让其通过. // 特别是看到了reply 方向的第一个 pkt 后
+
+
+
     conn_update_expiration(ct, &conn->up, icmp_timeouts[conn->state], now);
     return ret;
 }
@@ -68,6 +72,7 @@ icmp4_valid_new(struct dp_packet *pkt)
 {
     struct icmp_header *icmp = dp_packet_l4(pkt);
 
+    // 支持这三种
     return icmp->icmp_type == ICMP4_ECHO_REQUEST
            || icmp->icmp_type == ICMP4_INFOREQUEST
            || icmp->icmp_type == ICMP4_TIMESTAMP;
@@ -78,6 +83,7 @@ icmp6_valid_new(struct dp_packet *pkt)
 {
     struct icmp6_header *icmp6 = dp_packet_l4(pkt);
 
+    // 只支持这一种
     return icmp6->icmp6_type == ICMP6_ECHO_REQUEST;
 }
 

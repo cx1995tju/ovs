@@ -8390,7 +8390,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                     tp_id = DEFAULT_TP_ID;
                 }
                 break;
-            case OVS_CT_ATTR_NAT: { // 从 b 里进一步提取 nest 的信息, 用来后续做 NAT
+            case OVS_CT_ATTR_NAT: { // 从 b 里进一步提取 nest 的信息, 用来后续做 NAT. UN_NAT 也会有一个 NAT action 么?
+				    // 注意 回包方向也会下发 ct(nat) 的 flow 的
                 const struct nlattr *b_nest;
                 unsigned int left_nest;
                 bool ip_min_specified = false;

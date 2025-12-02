@@ -149,6 +149,7 @@ struct conn {
     uint32_t tp_id; /* Timeout policy ID. */
 };
 
+// ref: conn_update_state()
 enum ct_update_res {
     CT_UPDATE_INVALID,
     CT_UPDATE_VALID,

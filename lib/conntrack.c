@@ -1322,17 +1322,17 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
         enum ct_update_res res = conn_update(ct, conn, pkt, ctx, now);
 
         switch (res) {
-        case CT_UPDATE_VALID: // HERE
+        case CT_UPDATE_VALID: // HERE, pkt 正常通过检查
             pkt->md.ct_state |= CS_ESTABLISHED;
             pkt->md.ct_state &= ~CS_NEW;
             if (ctx->reply) {
                 pkt->md.ct_state |= CS_REPLY_DIR;
             }
             break;
-        case CT_UPDATE_INVALID:
+        case CT_UPDATE_INVALID: // pkt 没有通过检查
             pkt->md.ct_state = CS_INVALID;
             break;
-        case CT_UPDATE_NEW: // HERE
+        case CT_UPDATE_NEW: // HERE. 找到的 conn 过期了, 或者不适用了. 需要重新进入 conn_not_found 路径去创建 conn 了
             ovs_mutex_lock(&ct->ct_lock);
             if (conn_lookup(ct, &conn->key, now, NULL, NULL)) {
                 conn_clean(ct, conn);
@@ -1340,7 +1340,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             ovs_mutex_unlock(&ct->ct_lock);
             create_new_conn = true;
             break;
-        case CT_UPDATE_VALID_NEW: // HERE
+        case CT_UPDATE_VALID_NEW: // HERE. 这个 pkt 是 first pkt 的重传, 用它来重新更新 conn 的 init 状态
             pkt->md.ct_state |= CS_NEW;
             break;
         default:
@@ -1358,12 +1358,12 @@ handle_nat(struct dp_packet *pkt, struct conn *conn,
     if (conn->nat_action &&
         (!(pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) ||
           (pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT) &&
-           zone != pkt->md.ct_zone))) { // 没有做过 NAT, 或者做了 NAT, 但是进入了新的 zone
+           zone != pkt->md.ct_zone))) { // 没有做过 NAT, 或者做了 NAT, 但是进入了新的 zone. 在同一个 zone 里如果做两次 nat 的话, 第二次会被忽略的, 变成 no-op
 
         if (pkt->md.ct_state & (CS_SRC_NAT | CS_DST_NAT)) {
             pkt->md.ct_state &= ~(CS_SRC_NAT | CS_DST_NAT); // 这表示是进入了新的 zone 再次做 NAT
         }
-        if (reply) {
+        if (reply) { // unnat 也走这条路径咯
             un_nat_packet(pkt, conn, related);
         } else {
             nat_packet(pkt, conn, related);
@@ -1372,6 +1372,7 @@ handle_nat(struct dp_packet *pkt, struct conn *conn,
 }
 
 // Question: ct_orig_tuple 的准确含义
+// 有了: initial_conn_lookup 之后不需要这个函数了 ?
 static bool
 check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
                  struct conn_lookup_ctx *ctx_in, long long now,
@@ -1387,9 +1388,10 @@ check_orig_tuple(struct conntrack *ct, struct dp_packet *pkt,
         return false;
     }
 
-    // 如果没有做过 nat, 且这一次进来没有 nat 要做.
-    // 那么用 ct_orig_tuple 里的信息重置 key 后再重新 look 一次
-
+    // 对于做过 nat, 且当前不是在做 nat 的报文, 再给一次查找的机会
+    //
+    // 问题是:什么样的情况做过了 nat, 然后在 initial_conn_lookup 里又查找失败了呢.
+    //
     struct conn_key key;
     memset(&key, 0 , sizeof key);
 
@@ -1547,7 +1549,11 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
                     long long now, bool natted)
 {
 	// natted 表示做过 nat 了
-    if (natted) {
+    if (natted) { // 如果不对已经做过 nat 的报文特别的处理, 这里会找不到 conn.
+		  // 可能会导致创建新的 conn 的. 在 ovs 的实现里, 如果一个 flow
+		  // 做两次 nat, 只有第一次会生效的, 第二次会变成 no-op, 这和内
+		  // 核行为一致. 这里找到了 conn 后, 后面不会再次去实际 nat 的.
+		  // ref: handle_nat, 1e19f9aa2686318401953249f12c5657faef27c5
         /* If the packet has been already natted (e.g. a previous
          * action took place), retrieve it performing a lookup of its
          * reverse key. */
@@ -1561,7 +1567,7 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
     if (natted) {
         if (OVS_LIKELY(ctx->conn)) {
             ctx->reply = !ctx->reply; // 也要取反的
-            ctx->key = ctx->reply ? ctx->conn->rev_key : ctx->conn->key;
+            ctx->key = ctx->reply ? ctx->conn->rev_key : ctx->conn->key; // 对于做过 nat 的 pkt, 要还原 key
             ctx->hash = conn_key_hash(&ctx->key, ct->hash_basis);
         } else {
             /* A lookup failure does not necessarily imply that an
@@ -1591,8 +1597,8 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
  *  - conn 的多次查找
  *    - 第一次查找: initial_conn_lookup. 用 pkt 里提取的 ctx 信息(原始报文的 hash 和 key)来做第一次查找. 这里的查找针对已经做过 nat 的报文要特殊处理
  *    - 第二次查找: force 情况下在锁的保护下重新找一次. ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
- *    - 第三次查找: 针对 UN_NAT 场景的第三次查找
- *    - 第四次查找: check_orig_tuple 使用 orig 信息重新查找一次. 前提是有 orig 信息, 而有 orig 信息, 肯定是已经过过 ct 了
+ *    - 第三次查找: 针对 UN_NAT 场景的第三次查找. 需要找到原始的 conn 信息, 这里面才记录了之前做 nat 的信息
+ *    - 第四次查找: check_orig_tuple 针对做过 nat 的报文再给一次机会去找 conn. 按理来说做过 nat 的报文再次进来是可以找到 conn 的. 没有找到的话是不是策略变化了.
  *    - 第五次查找: conn_not_found 里创建新的 conn 之前再查找一次. ref: 28274f774adb3f85a7b351ba24ab0ba7817c9794
  *  - force 的特殊处理:
  *    - 如果是 reply 方向的 pkt 带了 force 那么要将原始方向的 conn 清除掉. 然后走 conn_not_found() 路径
@@ -1605,6 +1611,8 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
  *
  *
  * 先看 create_new_conn conn_not_found 路径
+ *
+ * 对于 ftp, sftp 等涉及到 alg 的连接. 用来判断报文状态的信息更多, 更麻烦.
  *
  */
 static void
@@ -1646,7 +1654,8 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
             struct conn *rev_conn = conn;  /* Save for debugging. */
             uint32_t hash = conn_key_hash(&conn->rev_key, ct->hash_basis); // 用 rev_key 去重新找反向的信息 ???
 	    // 这一次查找的 hash 值是 rev_key 计算出来的. 因为当前 ctx 对应的 pkt 是 UN_NAT 报文, 是反向的
-            conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ??? nat 场景要用 rev_key 去找到真正的 conn ?
+	    // ref: comment above initial_conn_lookup, 注意那里 conn, nat_conn 的 key 和 rev_key 的设置
+            conn_key_lookup(ct, &ctx->key, hash, now, &conn, &ctx->reply); // 这里找到 conn ??? nat 场景要用 rev_key 去找到原始的 conn, 原始 conn 里才有 nat 需要的信息
 
             if (!conn) {
                 pkt->md.ct_state |= CS_INVALID;
@@ -1674,11 +1683,14 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
 		// update 的过程可能还得去 create new conn
             create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
         }
+	// unnat 包的 nat_action_info 是不是为 NULL 呢 ? 也会走这条路径么? 
+	// reply 包方向也需要下发 ct(nat) 的 openflow 的
         if (nat_action_info && !create_new_conn) {
 		// 非 new  pkt 的 nat 处理
             handle_nat(pkt, conn, zone, ctx->reply, ctx->icmp_related);
         }
-    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 原始方向没有找到 conn. 里面会排除 nat 场景后用orig tuple 再查找一次
+    } else if (check_orig_tuple(ct, pkt, ctx, now, &conn, nat_action_info)) { // 报文里提取的 key 没有找到对应的 conn, 那么这里再给一次机会. 还找不到才去创建 conn. 另外有 ct_orig_tuple 说明之前肯定过过 ct 了. 所以用 orig tuple 找到的 conn 再处理一次, 看看是不是发生了什么策略变化. 因为按理来说有 ct_orig_tuple 是应该可以找到 conn 的.
+									      // ref: f8016041db895fb5bcebe3d837630f8504db6334
         create_new_conn = conn_update_state(ct, pkt, ctx, conn, now);
     } else {
         if (ctx->icmp_related) {
@@ -1718,6 +1730,11 @@ process_one(struct conntrack *ct, struct dp_packet *pkt,
 
     // conn 里已经收集了足够的信息, 用来修改 pkt 了
     // 为报文设置 ct 相关 metadata, 这里会设置 tracked
+    //
+    // ctx->key 的来源:
+    // - 当前处理的 pkt 里提取的
+    // - 如果做过 nat, 那么: 要从 nat 相关的 conn 里提取出来. 而不是 pkt 里的原始的 conn
+    // - 就算进了 write_ct_md 也可能被修改
     write_ct_md(pkt, zone, conn, &ctx->key, alg_exp);
 
     // 设置 mac, label
@@ -1806,6 +1823,7 @@ conntrack_clear(struct dp_packet *packet)
 {
     /* According to pkt_metadata_init(), ct_state == 0 is enough to make all of
      * the conntrack fields invalid. */
+	// 清空 pkt 里的 ct 信息. 但是 ct 模块里的 conn 信息那都还是在的.
     packet->md.ct_state = 0;
     pkt_metadata_init_conn(&packet->md);
 }

@@ -57,6 +57,8 @@ other_conn_update(struct conntrack *ct, struct conn *conn_,
         ret = CT_UPDATE_VALID_NEW;
     }
 
+    // 和 icmp 类似，基本都是让 pkt 无条件通过. 特别是看到了 reply 方向的 pkt 后
+
     conn_update_expiration(ct, &conn->up, other_timeouts[conn->state], now);
 
     return ret;
