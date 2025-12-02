@@ -8384,7 +8384,7 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                  * netlink events. */
                 break;
             case OVS_CT_ATTR_TIMEOUT:      // timeout 信息
-                if (!str_to_uint(nl_attr_get_string(b), 10, &tp_id)) {
+                if (!str_to_uint(nl_attr_get_string(b), 10, &tp_id)) { // timeout policy id
                     VLOG_WARN("Invalid Timeout Policy ID: %s.",
                               nl_attr_get_string(b));
                     tp_id = DEFAULT_TP_ID;

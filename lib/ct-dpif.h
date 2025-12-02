@@ -61,6 +61,7 @@ struct ct_dpif_timestamp {
 
 #define DEFAULT_TP_ID 0
 
+// XXX: 无法确保 tcp 连接的所有报文都经过了 ct 模块, 所以这里的状态切换和真实的 tcp 状态机是有一些区别的
 #define CT_DPIF_TCP_STATES \
     CT_DPIF_TCP_STATE(CLOSED) \
     CT_DPIF_TCP_STATE(LISTEN) \

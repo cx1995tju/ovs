@@ -49,9 +49,10 @@ COVERAGE_DEFINE(conntrack_tcp_seq_chk_bypass);
 COVERAGE_DEFINE(conntrack_tcp_seq_chk_failed);
 COVERAGE_DEFINE(conntrack_invalid_tcp_flags);
 
+// ref: tcp_new_conn
 struct tcp_peer {
-    uint32_t               seqlo;          /* Max sequence number sent     */
-    uint32_t               seqhi;          /* Max the other end ACKd + win */
+    uint32_t               seqlo;          /* Max sequence number sent     */ // 从本端发送的 pkt:seq 里提取的
+    uint32_t               seqhi;          /* Max the other end ACKd + win */ // 从 peer 的 pkt:ack 里提取的
     uint16_t               max_win;        /* largest window (pre scaling) */
     uint8_t                wscale;         /* window scaling factor        */
     enum ct_dpif_tcp_state state;
@@ -59,7 +60,7 @@ struct tcp_peer {
 
 struct conn_tcp {
     struct conn up;
-    struct tcp_peer peer[2]; /* 'conn' lock protected. */
+    struct tcp_peer peer[2]; /* 'conn' lock protected. */ // peer[0] -> peer[1] 是原始方向
 };
 
 enum {
@@ -114,6 +115,7 @@ tcp_invalid_flags(uint16_t flags)
 
 #define TCP_MAX_WSCALE 14
 #define CT_WSCALE_FLAG 0x80
+// 建立 tcp ct conn 的时候的报文不是 syn 包, 那么就只能猜测双方的 wscale 了
 #define CT_WSCALE_UNKNOWN 0x40
 #define CT_WSCALE_MASK 0xf
 
@@ -150,6 +152,8 @@ tcp_get_wscale(const struct tcp_header *tcp)
     return wscale;
 }
 
+// 可以强行跳过 seq 检查的
+// 默认情况下是做检查的
 static bool
 tcp_bypass_seq_chk(struct conntrack *ct)
 {
@@ -160,7 +164,83 @@ tcp_bypass_seq_chk(struct conntrack *ct)
     return false;
 }
 
-// 关注返回值
+// 核心逻辑: 关注返回值
+// INPUT:
+// - @ct: global ct moudle root struct
+// - @conn_: the conn struct for this tcp connection, Obtained from the generic CT layer
+// - @pkt: 整理被处理的 pkt
+// - @reply: 表示这个 pkt 的方向
+// - @now: 用来判断 ct 是不是超时了
+//
+//
+// 这个函数的核心逻辑就是检测一个 tcp  包是否合法:
+// - 一些基础的检测: tcp_flags
+// - 最重要的是 seq 范围和 ack 范围的检测
+//
+// ref:  real stateful TCP Packet Filtering in IP Filter.
+//
+// seq 和 ack 范围的检测就是使用的上述 paper 里的算法.
+//
+// 算法原理: 合法的 seq 号和 ack 号满足下述条件
+//
+// 对于一个 A->B 的 pkt [s, s+n)
+// - s+n <= B:ack     + A:maxwin
+// - s   >= A:pre:s+n - A:maxwin
+//
+// A->B 的 pkt ack号 的合法范围
+// - ack <= B:s+n
+// - ack >= B:s+n - MAXACKWINDOW(66000)
+//
+// 注: 考虑到 zero window probing 问题, maxwin 修正为 max(maxwin, 1)
+//
+// 算法实现, 为每端(self, peer)维护三个变量:
+// - td_end(seqlo):     F 看到的 self 发送的最大的 s + n.          和 snd_nxt 的含义类似
+// - td_maxend(seqhi):  F 看到的 peer 发送的最大的 ack + max(win). 即 CT 看到的窗口 left_boundary + max(win, 1)
+// - td_maxwin:         F 看到的 self 发送的 maxwin
+//
+//
+// 然后从 pkt 里提取出下述信息:
+// - ack: ack 号
+// - seq: seq 号, i.e. s
+// - end: seq 号 + payload len. i.e. s+n
+//
+//
+// 综上 合法的 pkt 需要 满足:
+// - end <= self->seqhi
+// - seq >= self.seqlo  - peer.max_win
+// - ack <= peer->seqlo
+// - ack >= peer->seqlo - MAXACKWINDOW
+//
+// 定义 ackskew = peer->seqlo - ack, 那么有
+// - end          <= self->seqhi
+// - seq          >= self.seqlo - peer.max_win
+// - 0            <= ackskew
+// - MAXACKWINDOW >= ackskew
+//
+// 另外需要针对分片报文的处理放宽条件:
+//
+// 定义 ackskew = peer->seqlo - ack, 那么有
+// - end          <= self->seqhi
+// - seq          >= self.seqlo - peer.max_win
+// - -67035       <= ackskew
+// - MAXACKWINDOW >= ackskew
+//
+// 关于 seqlo, seqhi, maxwin 的初始化与更新:
+//
+// *maxwin* 最好更新的, 只要观察 self->peer 包里的 window 信息就可以了. 唯一的
+// 例外就是当我们错过了 syn 和 syn+acl 包里的 wscale 的时候, 我们就要放宽条件,
+// 默认 wscale 是最大值.
+//
+// *seqlo* 自己发送的 pkt seq, 很好更新的.
+//
+// *seqhi* 如果看到了对方发送的包里带了 ack, 那么就用这个值了. 如果暂时还没有看
+// 到对方的 ack 包. 那么就默认用 snd_nxt + 1. 尽量放宽限制.
+//
+// 
+// 其他问题:
+// - pure ack 的处理: 没有 data, 也就是 data 平凡的 valid. 
+// - ack flag 没有设置: ack 号没有意义, 也就是 ack 号平凡的 valid
+// - 创建 ct entry 的 pkt 不是 SYN 包
 static enum ct_update_res
 tcp_conn_update(struct conntrack *ct, struct conn *conn_,
                 struct dp_packet *pkt, bool reply, long long now)
@@ -171,11 +251,11 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
     struct tcp_peer *src = &conn->peer[reply ? 1 : 0];
     /* The peer that should receive 'pkt' */
     struct tcp_peer *dst = &conn->peer[reply ? 0 : 1];
-    uint8_t sws = 0, dws = 0;
+    uint8_t sws = 0, dws = 0; // window scale
     uint16_t tcp_flags = TCP_FLAGS(tcp->tcp_ctl);
 
     uint16_t win = ntohs(tcp->tcp_winsz);
-    uint32_t ack, end, seq, orig_seq;
+    uint32_t ack, end, seq, orig_seq; // ack 号, end = seq + packet_len, seq 号
     uint32_t p_len = dp_packet_get_tcp_payload_length(pkt);
 
     if (tcp_invalid_flags(tcp_flags)) {
@@ -183,21 +263,23 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
         return CT_UPDATE_INVALID;
     }
 
-    if ((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) { // 第一个 SYN 包
+    /* pure SYN 包的处理 */
+    if ((tcp_flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) {
         if (dst->state >= CT_DPIF_TCPS_FIN_WAIT_2
-            && src->state >= CT_DPIF_TCPS_FIN_WAIT_2) {
+            && src->state >= CT_DPIF_TCPS_FIN_WAIT_2) { // TIMEWAIT or FIN_WAIT_2. 说明 dst 发出的 FIN 都被处理了. 即 src 之前已经相应了 FIN 了. 那么现在其发出了 syn 那么肯定是要创建新连接. 
             src->state = dst->state = CT_DPIF_TCPS_CLOSED;
-            return CT_UPDATE_NEW;
-        } else if (src->state <= CT_DPIF_TCPS_SYN_SENT) {
+            return CT_UPDATE_NEW; // 所以返回这个 flag, 让其重新走 conn_not_found 逻辑去创建新的 conn
+        } else if (src->state <= CT_DPIF_TCPS_SYN_SENT) { // 这里应该是 syn 重传了, 然后在 conn_update_state 里会被标记为 ct_stat.new
             src->state = CT_DPIF_TCPS_SYN_SENT;
             conn_update_expiration(ct, &conn->up, CT_TM_TCP_FIRST_PACKET, now);
             return CT_UPDATE_VALID_NEW;
         }
     }
 
+    /* 提取 wscale 来校验后续的 seq */
     if (src->wscale & CT_WSCALE_FLAG
         && dst->wscale & CT_WSCALE_FLAG
-        && !(tcp_flags & TCP_SYN)) {
+        && !(tcp_flags & TCP_SYN)) { // 不是 syn 报文, 而且之前从 syn 报文提取出了 wscale
 
         sws = src->wscale & CT_WSCALE_MASK;
         dws = dst->wscale & CT_WSCALE_MASK;
@@ -210,21 +292,22 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
         dws = TCP_MAX_WSCALE;
     }
 
-    /*
+    /* XXX: 核心逻辑, seq 的校验
      * Sequence tracking algorithm from Guido van Rooij's paper:
      *   http://www.madison-gurkha.com/publications/tcp_filtering/
      *      tcp_filtering.ps
      */
 
+
+    // 下面的核心就是获取 seqlo 和 seqhi
     orig_seq = seq = ntohl(get_16aligned_be32(&tcp->tcp_seq));
     bool check_ackskew = true;
-    if (src->state < CT_DPIF_TCPS_SYN_SENT) {
-        /* First packet from this end. Set its state */
-
+    if (src->state < CT_DPIF_TCPS_SYN_SENT) { // CLOSED or LISTEN
+        /* First packet from this end. Set its state */ // 因为只有一个方向的 pkt 是用来创建 conn 的, 它在 tcp_new_conn 里处理了
         ack = ntohl(get_16aligned_be32(&tcp->tcp_ack));
 
         end = seq + p_len;
-        if (tcp_flags & TCP_SYN) {
+        if (tcp_flags & TCP_SYN) { // wscale 的提取逻辑
             end++;
             if (dst->wscale & CT_WSCALE_FLAG) {
                 src->wscale = tcp_get_wscale(tcp);
@@ -234,6 +317,7 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
                     win = DIV_ROUND_UP((uint32_t) win, 1 << sws);
                     dws = dst->wscale & CT_WSCALE_MASK;
                 } else {
+			// 只有一个 方向有 wscale 的时候, 将另一个方向的也抹平, why (???)
                     /* fixup other window */
                     dst->max_win <<= dst->wscale & CT_WSCALE_MASK;
                     /* in case of a retrans SYN|ACK */
@@ -245,6 +329,11 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
             end++;
         }
 
+	// XXX: 无法确保 tcp 连接的所有报文都经过了 ct 模块, 所以这里的状态切换
+	// 和真实的 tcp 状态机是有一些区别的. 所以这里只要看到了某个方向的第一
+	// 个 pkt, 就无条件切换到 SYN_SENT 状态, 而不在乎其是否是 SYN 报文
+	//
+	// 对于第一个包 来说, 当然是没有以前的 seqlo 的信息的, 所以用当前的 seq 来 pretend 之前的 seqlo 信息.
         src->seqlo = seq;
         src->state = CT_DPIF_TCPS_SYN_SENT;
         /*
@@ -252,7 +341,9 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
          * the crappy stack check or if we picked up the connection
          * after establishment)
          */
-        if (src->seqhi == 1
+	// 注意进入这里的前提是 src->state < SYN_SENT, 说明之前没有看到过这个方向的 pkt
+	// 那么这里 seqhi 常态就是 1. rec: tcp_new_conn
+        if (src->seqhi == 1 /* ref tcp_new_conn 里的 dst 的设置 */
                 || SEQ_GEQ(end + MAX(1, dst->max_win << dws), src->seqhi)) {
             src->seqhi = end + MAX(1, dst->max_win << dws);
             /* We are either picking up a new connection or a connection which
@@ -265,7 +356,7 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
             src->max_win = win;
         }
 
-    } else {
+    } else { // 这是常态路径, ack end 的更新都很简单的
         ack = ntohl(get_16aligned_be32(&tcp->tcp_ack));
         end = seq + p_len;
         if (tcp_flags & TCP_SYN) {
@@ -276,18 +367,19 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
         }
     }
 
-    if ((tcp_flags & TCP_ACK) == 0) {
+    if ((tcp_flags & TCP_ACK) == 0) { // ack flag 没有设置, 也就是 ack 号没有意义. 那么这里为其设置一个特殊值, 让其平凡的通过后续 ack号检查
         /* Let it pass through the ack skew check */
         ack = dst->seqlo;
     } else if ((ack == 0
                 && (tcp_flags & (TCP_ACK|TCP_RST)) == (TCP_ACK|TCP_RST))
                /* broken tcp stacks do not set ack */) {
+	    // 有些协议栈比奇怪的, 比如在 SYN 超时后发送 FIN|ACK / RST|ACK 包, 但是 ACK 号是非法的
         /* Many stacks (ours included) will set the ACK number in an
          * FIN|ACK if the SYN times out -- no sequence to ACK. */
         ack = dst->seqlo;
     }
 
-    if (seq == end) {
+    if (seq == end) { // pure ack pkt, 没有 data , 也就是 data 平凡的 valid.所以这里设置 seq, end 值, 让其肯定通过后续 seq 的检查
         /* Ease sequencing restrictions on no data packets */
         seq = src->seqlo;
         end = seq;
@@ -304,10 +396,11 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
         && (ackskew <= (MAXACKWINDOW << sws))
         /* Acking not more than one window forward */
         && ((tcp_flags & TCP_RST) == 0 || orig_seq == src->seqlo
-            || (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo)))
+            || (orig_seq == src->seqlo + 1) || (orig_seq + 1 == src->seqlo)))	 // rst 包的特殊处理
         || tcp_bypass_seq_chk(ct)) {
         /* Require an exact/+1 sequence match on resets when possible */
 
+	// 通过检查了,  更新各种信息了
         /* update max window */
         if (src->max_win < win) {
             src->max_win = win;
@@ -321,6 +414,8 @@ tcp_conn_update(struct conntrack *ct, struct conn *conn_,
             dst->seqhi = ack + MAX((win << sws), 1);
         }
 
+
+	// tcp state machine 更新
         /* update states */
         if (tcp_flags & TCP_SYN && src->state < CT_DPIF_TCPS_SYN_SENT) {
                 src->state = CT_DPIF_TCPS_SYN_SENT;
@@ -436,6 +531,16 @@ tcp_valid_new(struct dp_packet *pkt)
     return true;
 }
 
+// 提取 tcp 连接相关的信息(src, dst)并保存
+//
+// 维护两端的 tcp_peer 结构
+//
+// ref: comments on tcp_conn_update()
+//
+//
+// 第一个进来的报文不一定是 syn 报文的, 考虑下述情况:
+// - ct(force, commit) action
+// - ovs 进程重启了, 但是 tcp 连接是一直存在的
 static struct conn *
 tcp_new_conn(struct conntrack *ct, struct dp_packet *pkt, long long now,
              uint32_t tp_id)
@@ -447,14 +552,17 @@ tcp_new_conn(struct conntrack *ct, struct dp_packet *pkt, long long now,
 
     newconn = xzalloc(sizeof *newconn);
 
+    // peer[0] -> peer[1] 是原始方向
+    // pkt: 也是原始方向的第一个 syn 报文
     src = &newconn->peer[0];
     dst = &newconn->peer[1];
 
     src->seqlo = ntohl(get_16aligned_be32(&tcp->tcp_seq));
     src->seqhi = src->seqlo + dp_packet_get_tcp_payload_length(pkt) + 1;
 
+    // 进来的报文不一定非是 SYN 报文的
     if (tcp_flags & TCP_SYN) {
-        src->seqhi++;
+        src->seqhi++; // syn 要占据一个序号
         src->wscale = tcp_get_wscale(tcp);
     } else {
         src->wscale = CT_WSCALE_UNKNOWN;
@@ -469,7 +577,7 @@ tcp_new_conn(struct conntrack *ct, struct dp_packet *pkt, long long now,
     if (tcp_flags & TCP_FIN) {
         src->seqhi++;
     }
-    dst->seqhi = 1;
+    dst->seqhi = 1;			// 这里初始化为这个值, 当第一个 dst->src 的包通过 tcp_conn_update 处理的时候可以平凡的通过么? 可以的, 见后面的 dst->state 的设置, 其会通过特殊路径得到处理. 在哪里会初始化 seqlo 的, 会对 seqhi 做特殊处理, 重新赋值, 同时跳过 ack 号的检查的
     dst->max_win = 1;
     src->state = CT_DPIF_TCPS_SYN_SENT;
     dst->state = CT_DPIF_TCPS_CLOSED;

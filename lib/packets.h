@@ -948,7 +948,8 @@ BUILD_ASSERT_DECL(TCP_HEADER_LEN == sizeof(struct tcp_header));
  * Names like CS_RELATED_BIT are bit indexes, e.g. 2. */
 
 
-// invalid: 处理的过程出错了
+// invalid: 处理的过程出错了. 或者没有通过 ct 的校验, 比如: tcp_conn_update() 中检测出了 tcp 报文是非法的
+// related: ref: conn_update_state, 两种情况: 一种正在处理 icmp error 报文: 另一种是 alg 情况
 #define CS_STATES                               \
     CS_STATE(NEW,         0, "new")             \
     CS_STATE(ESTABLISHED, 1, "est")             \

@@ -12,6 +12,10 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ *
+ * 主要是提供了一个 timeout 机制. 可以通过 ovs-vsctl 命令为不同的协议设置不同的
+ * timeout, 还可以为 tcp 的不同状态设置不同的 timeout
  */
 
 #include <config.h>
@@ -291,6 +295,8 @@ conn_init_expiration__(struct conntrack *ct, struct conn *conn,
 }
 
 /* ct_lock must be held. */
+// 设置超时, 不同的协议, 不同的连接状态都是不同的, 可以通过 ovs-vsctl 设置
+// 默认值: ref: ct_dpif_netdev_tp_def
 void
 conn_init_expiration(struct conntrack *ct, struct conn *conn,
                      enum ct_timeout tm, long long now)

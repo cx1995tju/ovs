@@ -95,7 +95,7 @@ struct conn_lookup_ctx {
     struct conn *conn;
     uint32_t hash;           // 查 hash table
     bool reply;
-    bool icmp_related;       // conn_key_extract 里获取的. 如果在处理的是 icmp
+    bool icmp_related;       // conn_key_extract 里获取的. 如果正在处理的是 icmp
 			     // error 报文. 会从其 payload 里提取原始报文信息.
 			     // 同时 ctx 里会设置该 flag. ref: extract_l4
 };
@@ -1295,7 +1295,7 @@ nat_res_exhaustion:
     return NULL;
 }
 
-/* XXX: 重要
+/* XXX: 重要, 核心逻辑
  *
  * 什么样的报文, 会如何更新状态 ?
  * */
@@ -1307,6 +1307,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
     ovs_assert(conn->conn_type == CT_CONN_TYPE_DEFAULT);
     bool create_new_conn = false;
 
+    // 这里提心啊了 RELATED flag 的两种来源
     if (ctx->icmp_related) {
         pkt->md.ct_state |= CS_RELATED;
         if (ctx->reply) {
@@ -1317,7 +1318,7 @@ conn_update_state(struct conntrack *ct, struct dp_packet *pkt,
             pkt->md.ct_state |= CS_RELATED;
         }
 
-	// 这里设置了 ct_state
+	// XXX: 核心的核心: 这里设置了 ct_state
         enum ct_update_res res = conn_update(ct, conn, pkt, ctx, now);
 
         switch (res) {
