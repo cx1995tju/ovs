@@ -4054,6 +4054,7 @@ dpif_netdev_flow_dump_next(struct dpif_flow_dump_thread *thread_,
     }
     ovs_mutex_unlock(&dump->mutex);
 
+    // 从 数据面去 dump flow, 然后转换为 dpif_flow
     for (i = 0; i < n_flows; i++) {
         struct odputil_keybuf *maskbuf = &thread->maskbuf[i];
         struct odputil_keybuf *keybuf = &thread->keybuf[i];

@@ -124,7 +124,7 @@ struct revalidator {
  */
 //refer to open_dpif_backer()->udpif_create()
 //用来处理 upcall 的 ctx
-//upcall datapath interface
+// upcall datapath interface
 // per-datapath-type 结构
 struct udpif {
     struct ovs_list list_node;         /* In all_udpifs list. */
@@ -636,6 +636,7 @@ udpif_resume_revalidators(struct udpif *udpif)
  * 'n_handlers_' and 'n_revalidators_' can never be zero.  'udpif''s
  * datapath handle must have packet reception enabled before starting
  * threads. */
+// 启动 upcall datapath interface 的一些线程: handler 线程和 revalidator 线程
 void
 udpif_set_threads(struct udpif *udpif, uint32_t n_handlers_,
                   uint32_t n_revalidators_)
@@ -684,10 +685,11 @@ udpif_set_threads(struct udpif *udpif, uint32_t n_handlers_,
         udpif_stop_threads(udpif, true);
     }
 
+    // 只会创建一次, 不过 ref: udpif_stop_threads, 如果配置更改了, 这里会重新创建的
     if (!udpif->handlers && !udpif->revalidators) {
         VLOG_INFO("Starting %u threads", n_handlers_requested +
                                          n_revalidators_requested);
-        int error; //只有system类型的数据通路才有改函数 dpif_netlink_handlers_set
+        int error; //只有system类型的数据通路才有改函数 dpif_netlink_handlers_set. ovs-dpdk 没有
         error = dpif_handlers_set(udpif->dpif, n_handlers_requested);
         if (error) {
             VLOG_ERR("failed to configure handlers in dpif %s: %s",
@@ -937,6 +939,19 @@ udpif_run_flow_rebalance(struct udpif *udpif)
 /* 		3. exit_latch, 说明需要将此线程退出，比如将线程数量改小后, 有一部分线程需要退出 */
 /* 		4. timeout超时后运行，最小值为500ms */
 /* 	- 简言之：flow gc的一些工作, 处理flow 流表的一些改动操作 */
+
+
+/* udpif_revalidator() 会有多线程在 run, 其中一个是 leader.  revalidator 线程分
+ * 为两个阶段, dump/sweep. 所有线程同时处于某个阶段. 由 leader 控制阶段的转换.
+ *
+ *
+ * dump 阶段: revalidate()
+ *
+ *
+ * sweep 阶段: revalidate_sweep()	
+ *
+ *
+ * */
 static void *
 udpif_revalidator(void *arg)
 {
@@ -952,7 +967,7 @@ udpif_revalidator(void *arg)
 
     revalidator->id = ovsthread_id_self();
     for (;;) {
-        if (leader) {
+        if (leader) { // 独属于 leader 的 pre-dump 工作
             uint64_t reval_seq;
 
             recirc_run(); /* Recirculation cleanup. */
@@ -986,6 +1001,8 @@ udpif_revalidator(void *arg)
         }
 
         /* Wait for the leader to start the flow dump. */
+	// 等待所有进程进入 dump 阶段, 显然 leader 是最后到达这里的, 因为
+	// leader 有一些额外工作要做
         ovs_barrier_block(&udpif->reval_barrier);
         if (udpif->pause) {
             revalidator_pause(revalidator);
@@ -1003,7 +1020,7 @@ udpif_revalidator(void *arg)
         /* Wait for all revalidators to finish garbage collection. */
         ovs_barrier_block(&udpif->reval_barrier);
 
-        if (leader) {
+        if (leader) { // 独属于 leader 的 post-sweep 工作
             unsigned int flow_limit;
             long long int duration;
 
@@ -2706,6 +2723,48 @@ udpif_update_used(struct udpif *udpif, struct udpif_key *ukey,
     return stats->used;
 }
 
+/*
+ *~revalidate()~ 主要工作:
+ * - ~dpif_flow_dump_thread_create()~
+ *
+ * - ~dpif_flow_dump_next()~ 最多获取 REVALIDATE_MAX_BATCH(50) 条 flow
+ *
+ * - 确定 max_idle timeout
+ *
+ * - 对于每个 batch，如果 n_dp_flows >= flow_limit, 则增加 upcall_flow_limit_hit
+ *   计数
+ *
+ * - 对于 batch 里的每条 flow 执行下述操作:
+ *   - ~ukey_acquire()~ 查找与 datapath flow 对应的 ~struct udpif_key *ukey ~
+ *     - 如果 ukey 存在但是无法 lock(EBUSY)，表示有线程在用。那么这一轮就跳过
+ *       它, 增加计数: ~upcall_ukey_contention~
+ *     - 如果是其他错误，那么会为该 flow 添加一个删除操作 ~delete_op_init__()~
+ *     - 如果没有 ukey，那么会创建一个 entry，来进一步评估 ukey. 这是为了避免
+ *       ovs restart 的时候不要盲目的删除所有的 datapath flow
+ *
+ *   - 根据 ~ukey->dump_seq~ 判断，是否之前处理过该 entry。 两个计数器增加计数:
+ *     dumped_duplicate_flow 或 dumped_new_flow，然后继续处理下一个数据路径流
+ *
+ *   - 如果 ~ukey state <= UKEY_OPERATIONAL~ ，将值更改为 UKEY_OPERATIONAL 。如
+ *     果该值大于 UKEY_OPERATIONAL ，则该条目处于某种删除状态。记录信息并继续处
+ *     理下一个条目。
+ *
+ *   - 如果流已空闲 ~max_idle~ 毫秒，或者我们处于恢复模式，则将 ukey 状态标记为
+ *     UKEY_DELETE 。否则，调用 revalidate_ukey() ，它将 ukey 状态标记为
+ *     UKEY_KEEP 、 UKEY_DELETE 或 UKEY_MODIFY 。有关更多详细信息，请参阅
+ *     “revalidate_ukey 函数”部分。
+ *
+ *   - 如果 ukey 状态未标记为 ~UKEY_KEEP—~ ，即状态为 UKEY_DELETE 或 UKEY_MODIFY
+ *     —，则将所需的数据路径操作添加到操作队列。对于 UKEY_DELETE ，还将 ukey 状
+ *     态设置为 UKEY_EVICTING 。
+ *
+ * - 现在批处理已完成，通过调用 ~push_dp_ops()~ 将所有操作推送到数据路径。对于
+ *   UKEY_DELETE ，此步骤还会更新统计信息并将 ukey 状态设置为 UKEY_EVICTED 。 
+ *
+ * - 尝试接收另一批流并对它们重复此序列。如果没有检索到更多流，则继续：此时，线
+ *   程已从 revalidate() 退出。它会等待所有线程完成 revalidate() 。一旦发生这种
+ *   情况，扫描阶段将通过调用 revalidator_sweep() 开始。
+ **/
 static void
 revalidate(struct revalidator *revalidator)
 {
@@ -2721,7 +2780,7 @@ revalidate(struct revalidator *revalidator)
     dump_seq = seq_read(udpif->dump_seq);
     reval_seq = seq_read(udpif->reval_seq);
     atomic_read_relaxed(&udpif->flow_limit, &flow_limit);
-    dump_thread = dpif_flow_dump_thread_create(udpif->dump);
+    dump_thread = dpif_flow_dump_thread_create(udpif->dump); //初始化了一个这么结构
     for (;;) {
         struct ukey_op ops[REVALIDATE_MAX_BATCH];
         int n_ops = 0;
@@ -2780,6 +2839,7 @@ revalidate(struct revalidator *revalidator)
         max_idle = n_dp_flows > flow_limit ? 100 : ofproto_max_idle;
 
         udpif->dpif->current_ms = time_msec();
+	// 一个又一个 datapath flow 来处理
         for (f = flows; f < &flows[n_dumped]; f++) {
             long long int used = f->stats.used;
             struct recirc_refs recircs = RECIRC_REFS_EMPTY_INITIALIZER;

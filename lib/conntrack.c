@@ -53,6 +53,16 @@
  *
  * 关于 zone limit, 通过 ovs-appctl 可以限制 zone 的 conn 总数. 而 zone 可以用
  * 来隔离不同的 vm. 即限制了 vm 的连接总数.
+ *
+ *
+ *
+ * 小结: 核心逻辑就是 pkt 进来后, 为 pkt 找到对应的 conn 结构, 判断出 pkt 的方
+ * 向, 然后利用 conn 里的 stateful 信息判断 pkt 是否 valid(维护 ct_state). 当然
+ * 这个过程还需要利用 pkt 的信息, 维护 conn 里的 stateful 信息.
+ *
+ * 当然还需要根据 ct action 维护 ct_zone, ct_mark, ct_label 等信息.
+ *
+ * 比较 tricky 的地方就是, 针对不同的情况, 查找 conn 的逻辑是有不同的.
  */
 
 #include <config.h>
@@ -1614,6 +1624,9 @@ initial_conn_lookup(struct conntrack *ct, struct conn_lookup_ctx *ctx,
  *
  * 对于 ftp, sftp 等涉及到 alg 的连接. 用来判断报文状态的信息更多, 更麻烦.
  *
+ *
+ * 一些特殊逻辑:
+ * - 进入新的  zone 的时候, ct_state 是 NULL
  */
 static void
 process_one(struct conntrack *ct, struct dp_packet *pkt,

@@ -13,6 +13,36 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ *
+ * 相关文件:
+ *
+ *
+ *
+ * netdev-offload-provider.h // 主要就是暴露一个 register 接口供下层 provider 注册使用
+ * netdev-offload.h     // 这个模块暴露出去的接口一般是给上层使用的
+ * netdev-offload.c     // 基本就是底层 tc/dpdk netdev_flow_api 接口的简单封装
+ *
+ * netdev-offload-tc.c  // 具体的 netdev_flow_api 的实现
+ * netdev-offload-dpdk.c
+ *
+ *
+ *
+ * 
+ * 核心数据结构
+ * - 核心 struct
+ *   - ~netdev_flow_api~
+ * - 核心 struct 的组织
+ * - 一般还会找到一个 root struct 的
+ * 
+ * 
+ * 外部接口
+ * - 全局变量
+ * - non-static 函数
+ * 
+ * 模块初始化和清理
+ * - init 函数
+ * - cleanup 函数
  */
 
 #include <config.h>
@@ -168,6 +198,7 @@ netdev_flow_api_equals(const struct netdev *netdev1,
     return netdev_flow_api1 == netdev_flow_api2;
 }
 
+// 为设备分配一个 flow api
 static int
 netdev_assign_flow_api(struct netdev *netdev)
 {

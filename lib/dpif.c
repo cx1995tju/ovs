@@ -1093,7 +1093,7 @@ dpif_flow_dump_destroy(struct dpif_flow_dump *dump)
 struct dpif_flow_dump_thread *
 dpif_flow_dump_thread_create(struct dpif_flow_dump *dump)
 {
-    return dump->dpif->dpif_class->flow_dump_thread_create(dump);
+    return dump->dpif->dpif_class->flow_dump_thread_create(dump); // ref: %dpif_netdev_flow_dump_thread_create
 }
 
 /* Releases 'thread'. */

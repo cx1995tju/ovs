@@ -2042,6 +2042,7 @@ set_tables_version(struct ofproto *ofproto_, ovs_version_t version)
     /* 'need_revalidate' can be reordered to happen before the atomic_store
      * above, but it does not matter as this variable is not accessed by other
      * threads. */
+    // 唤醒 revalidator 线程, 让其校验数据面 flow, 将过时的 flow 删除了.
     ofproto->backer->need_revalidate = REV_FLOW_TABLE;
 }
 

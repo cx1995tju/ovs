@@ -28,6 +28,7 @@
 extern "C" {
 #endif
 
+// 针对每个 netdev 使用下述接口来进行卸载
 struct netdev_flow_api {
     char *type;
     /* Flush all offloaded flows from a netdev.
