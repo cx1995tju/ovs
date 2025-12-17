@@ -35,14 +35,63 @@
  * - 核心 struct 的组织
  * - 一般还会找到一个 root struct 的
  * 
- * 
- * 外部接口
- * - 全局变量
- * - non-static 函数
- * 
- * 模块初始化和清理
- * - init 函数
- * - cleanup 函数
+ * 接口的实现:
+ * - netdev-offload-dpdk.c
+ *
+ *
+ * 提供的接口如何被调用:
+ *  
+ * - flow api 管理接口
+ *  netdev_flow_api_equals
+ *  netdev_register_flow_api_provider
+ *  netdev_init_flow_api
+ *  netdev_is_flow_api_enabled
+ *  netdev_set_flow_api_enabled
+ *  netdev_uninit_flow_api
+ *  netdev_unregister_flow_api_provider
+ *
+ * - flow offload 核心接口: ovs-dpdk 有一个 dp_netdev_flow_offload_main 线程做
+ *   异步卸载, 从一个 list 里获取需要卸载相关任务
+ *
+ *  netdev_flow_put	               // 增/改, handle_upcall() -> dp_netdev_flow_add() 里卸载
+ *
+ *  netdev_flow_del	               // 删
+ *  netdev_flow_flush
+ *
+ *  netdev_flow_dump_create            // 查
+ *  netdev_flow_dump_next
+ *  netdev_flow_dump_destroy
+ *  netdev_flow_get
+ *  netdev_flow_get_n_flows
+ *
+ *  netdev_any_oor
+ *
+ *  netdev_hw_miss_packet_recover
+ *
+ * - port 粒度 flow offload 接口
+ *  netdev_ports_flow_del
+ *  netdev_ports_flow_dump_create
+ *  netdev_ports_flow_flush
+ *  netdev_ports_flow_get
+ *  netdev_ports_get
+ *  netdev_ports_get_n_flows
+ *  netdev_ports_insert
+ *  netdev_ports_remove
+ *  netdev_ports_traverse
+ *
+ *  netdev_get_block_id
+ *  netdev_get_hw_info
+ *  netdev_set_hw_info
+ *
+ * - helper
+ *  netdev_ifindex_to_odp_port
+ *  netdev_is_offload_rebalance_policy_enabled
+ *
+ *
+ *
+ * 调用了哪些模块接口
+ *
+ *
  */
 
 #include <config.h>
@@ -381,6 +430,8 @@ netdev_get_block_id(struct netdev *netdev)
 /*
  * Get the value of the hw info parameter specified by type.
  * Returns the value on success (>= 0). Returns -1 on failure.
+ *
+ * 拿一些统计信息
  */
 int
 netdev_get_hw_info(struct netdev *netdev, int type)
@@ -475,6 +526,7 @@ netdev_is_flow_api_enabled(void)
     return netdev_flow_api_enabled;
 }
 
+// 这个类型的 port flow 全部 flush 了
 void
 netdev_ports_flow_flush(const char *dpif_type)
 {
@@ -693,6 +745,9 @@ netdev_ports_get_n_flows(const char *dpif_type, odp_port_t port_no,
     return ret;
 }
 
+// ifindex -> ovs datapath port id
+//
+// tc offload 使用, dpdk 不使用
 odp_port_t
 netdev_ifindex_to_odp_port(int ifindex)
 {
@@ -747,6 +802,9 @@ netdev_set_flow_api_enabled(const struct smap *ovs_other_config)
                                        TC_POLICY_DEFAULT));
 #endif
 
+	    // 硬件资源不足时, 动态卸载/删除 offloaded flow. 可以根据 pps 速率来选择要卸载的 flow.
+	    //
+	    // 更改这个值需要重启 ovs-vswitchd
             if (smap_get_bool(ovs_other_config, "offload-rebalance", false)) {
                 netdev_offload_rebalance_policy = true;
             }

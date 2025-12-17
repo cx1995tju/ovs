@@ -2645,6 +2645,7 @@ dp_netdev_flow_offload_put(struct dp_flow_offload_item *offload)
     /* Taking a global 'port_mutex' to fulfill thread safety restrictions for
      * the netdev-offload-dpdk module. */
     ovs_mutex_lock(&pmd->dp->port_mutex);
+    // flow 卸载
     ret = netdev_flow_put(port, &offload->match,
                           CONST_CAST(struct nlattr *, offload->actions),
                           offload->actions_len, &flow->mega_ufid, &info,
@@ -2671,6 +2672,7 @@ err_free:
     return -1;
 }
 
+// 有一个单独的线程 , 进行异步卸载
 static void *
 dp_netdev_flow_offload_main(void *data OVS_UNUSED)
 {
@@ -2688,7 +2690,7 @@ dp_netdev_flow_offload_main(void *data OVS_UNUSED)
             ovsrcu_quiesce_end();
         }
         list = ovs_list_pop_front(&dp_flow_offload.list);
-        offload = CONTAINER_OF(list, struct dp_flow_offload_item, node);
+        offload = CONTAINER_OF(list, struct dp_flow_offload_item, node); // 从 list 里获取卸载任务
         ovs_mutex_unlock(&dp_flow_offload.mutex);
 
         switch (offload->op) {
@@ -3689,6 +3691,7 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
     cmap_insert(&pmd->flow_table, CONST_CAST(struct cmap_node *, &flow->node),
                 dp_netdev_flow_hash(&flow->ufid));
 
+    // 异步卸载
     queue_netdev_flow_put(pmd, flow, match, actions, actions_len,
                           orig_in_port, DP_NETDEV_FLOW_OFFLOAD_OP_ADD);
     log_netdev_flow_change(flow, match, NULL, actions, actions_len);

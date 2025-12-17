@@ -1028,7 +1028,7 @@ udpif_revalidator(void *arg)
 
             dpif_flow_dump_destroy(udpif->dump);
             seq_change(udpif->dump_seq);
-            if (netdev_is_offload_rebalance_policy_enabled()) {
+            if (netdev_is_offload_rebalance_policy_enabled()) { // 允许判断 硬件是否 oor 了, 可能做 rebalance, 将 pps 大的 flow 卸载了
                 udpif_run_flow_rebalance(udpif);
             }
 

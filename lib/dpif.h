@@ -454,7 +454,7 @@ int dpif_port_del(struct dpif *, odp_port_t port_no, bool local_delete);
 struct dpif_port {
     char *name;                 /* Network device name, e.g. "eth0". */
     char *type;                 /* Network device type, e.g. "system". */
-    odp_port_t port_no;         /* Port number within datapath. */
+    odp_port_t port_no;         /* Port number within datapath. */ // datapath port id
 };
 void dpif_port_clone(struct dpif_port *, const struct dpif_port *);
 void dpif_port_destroy(struct dpif_port *);
