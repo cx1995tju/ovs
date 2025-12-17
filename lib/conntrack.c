@@ -2511,7 +2511,7 @@ conn_key_extract(struct conntrack *ct, struct dp_packet *pkt, ovs_be16 dl_type,
         bool hwol_bad_l4_csum = dp_packet_l4_checksum_bad(pkt);
         if (!hwol_bad_l4_csum) {
             bool  hwol_good_l4_csum = dp_packet_l4_checksum_valid(pkt)
-                                      || dp_packet_hwol_tx_l4_checksum(pkt);
+                                      || dp_packet_hwol_tx_l4_checksum(pkt); // XXX: 这里 pkt里携带了某些 ol_flags 的时候, 比如: tso, 那么报文 csum 就是错的. 所以这里就不校验了
             /* Validate the checksum only when hwol is not supported. */
             if (extract_l4(&ctx->key, l4, dp_packet_l4_size(pkt),
                            &ctx->icmp_related, l3, !hwol_good_l4_csum,
