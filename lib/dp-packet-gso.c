@@ -128,6 +128,8 @@ dp_packet_gso(struct dp_packet *p, struct dp_packet_batch **batches)
         }
 
         seg = dp_packet_gso_seg_new(p, hdr_len, data_pos, seg_len);
+        // XXX: 这里的代码很要命. 默认了是连续内存存储的报文. 所以要将 ovs 改成
+        // mbuf chain 很麻烦.
         data_pos += seg_len;
 
         /* Update L3 header. */

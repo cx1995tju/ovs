@@ -628,7 +628,12 @@ tun_metadata_from_geneve_nlattr(const struct nlattr *attr, bool is_mask,
  * from the tunnel header to the representation that maps options to
  * pre-allocated locations. The original version (in UDPIF form) is passed
  * in 'src' and the translated form in stored in 'dst'.  To handle masks, the
- * flow must also be passed in through 'flow' (in the original, raw form). */
+ * flow must also be passed in through 'flow' (in the original, raw form). 
+ *
+ * geneve 协议支持 tlv 的. 要匹配这些 tlv, 在 ovs 的 openflow 扩展中是通过 tun
+ * fields 中的 tun_metadata0-63 来实现的. 这里就涉及到一个 geneve tlv type 到
+ * metadata 的转换.
+ * */
 int
 tun_metadata_from_geneve_udpif(const struct tun_table *tun_tab,
                                const struct flow_tnl *flow,
