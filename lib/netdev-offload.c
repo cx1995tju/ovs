@@ -13,6 +13,83 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
+ * 相关文件:
+ *
+ *
+ *
+ * netdev-offload-provider.h // 主要就是暴露一个 register 接口供下层 provider 注册使用
+ * netdev-offload.h     // 这个模块暴露出去的接口一般是给上层使用的
+ * netdev-offload.c     // 基本就是底层 tc/dpdk netdev_flow_api 接口的简单封装
+ *
+ * netdev-offload-tc.c  // 具体的 netdev_flow_api 的实现
+ * netdev-offload-dpdk.c
+ *
+ *
+ *
+ * 
+ * 核心数据结构
+ * - 核心 struct
+ *   - ~netdev_flow_api~
+ * - 核心 struct 的组织
+ * - 一般还会找到一个 root struct 的
+ * 
+ * 接口的实现:
+ * - netdev-offload-dpdk.c
+ *
+ *
+ * 提供的接口如何被调用:
+ *  
+ * - flow api 管理接口
+ *  netdev_flow_api_equals
+ *  netdev_register_flow_api_provider
+ *  netdev_init_flow_api
+ *  netdev_is_flow_api_enabled
+ *  netdev_set_flow_api_enabled
+ *  netdev_uninit_flow_api
+ *  netdev_unregister_flow_api_provider
+ *
+ * - flow offload 核心接口: ovs-dpdk 有一个 dp_netdev_flow_offload_main 线程做
+ *   异步卸载, 从一个 list 里获取需要卸载相关任务
+ *
+ *  netdev_flow_put	               // 增/改, handle_upcall() -> dp_netdev_flow_add() 里卸载
+ *
+ *  netdev_flow_del	               // 删
+ *  netdev_flow_flush
+ *
+ *  netdev_flow_dump_create            // 查
+ *  netdev_flow_dump_next
+ *  netdev_flow_dump_destroy
+ *  netdev_flow_get
+ *  netdev_flow_get_n_flows
+ *
+ *  netdev_any_oor
+ *
+ *  netdev_hw_miss_packet_recover
+ *
+ * - port 粒度 flow offload 接口
+ *  netdev_ports_flow_del
+ *  netdev_ports_flow_dump_create
+ *  netdev_ports_flow_flush
+ *  netdev_ports_flow_get
+ *  netdev_ports_get
+ *  netdev_ports_get_n_flows
+ *  netdev_ports_insert
+ *  netdev_ports_remove
+ *  netdev_ports_traverse
+ *
+ *  netdev_get_block_id
+ *  netdev_get_hw_info
+ *  netdev_set_hw_info
+ *
+ * - helper
+ *  netdev_ifindex_to_odp_port
+ *  netdev_is_offload_rebalance_policy_enabled
+ *
+ *
+ *
+ * 调用了哪些模块接口
+ *
  */
 
 #include <config.h>
@@ -548,6 +625,7 @@ netdev_offload_ufid_to_thread_id(const ovs_u128 ufid)
         return 0;
     }
 
+    // 基于 ufid 计算一个 hash 值, 然后对线程数取模得到对应的线程 ID
     ufid_hash = hash_words64_inline(
             (const uint64_t [2]){ ufid.u64.lo,
                                   ufid.u64.hi }, 2, 1);
@@ -557,10 +635,12 @@ netdev_offload_ufid_to_thread_id(const ovs_u128 ufid)
 unsigned int
 netdev_offload_thread_init(void)
 {
+    // 没什么重要的, 就是分配一个 offload thread id 而已
     static atomic_count next_id = ATOMIC_COUNT_INIT(0);
     bool thread_is_hw_offload;
     bool thread_is_rcu;
 
+    // XXX: thread name is important here.
     thread_is_hw_offload = !strncmp(get_subprogram_name(),
                                     "hw_offload", strlen("hw_offload"));
     thread_is_rcu = !strncmp(get_subprogram_name(), "urcu", strlen("urcu"));

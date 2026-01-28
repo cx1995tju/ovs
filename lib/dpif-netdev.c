@@ -2700,6 +2700,7 @@ mark_to_flow_find(const struct dp_netdev_pmd_thread *pmd,
     return NULL;
 }
 
+// 分配一个 offload task 用于 flow offload, 后续通过 queue 提交给 offload thread
 static struct dp_offload_thread_item *
 dp_netdev_alloc_flow_offload(struct dp_netdev *dp,
                              struct dp_netdev_flow *flow,
@@ -2740,6 +2741,7 @@ dp_netdev_free_flow_offload(struct dp_offload_thread_item *offload)
     ovsrcu_postpone(dp_netdev_free_flow_offload__, offload);
 }
 
+// 释放掉 offload task
 static void
 dp_netdev_free_offload(struct dp_offload_thread_item *offload)
 {
@@ -2755,6 +2757,7 @@ dp_netdev_free_offload(struct dp_offload_thread_item *offload)
     };
 }
 
+// offload task 入队到指定的 offload thread
 static void
 dp_netdev_append_offload(struct dp_offload_thread_item *offload,
                          unsigned int tid)
@@ -2777,6 +2780,7 @@ dp_netdev_offload_flow_enqueue(struct dp_offload_thread_item *item)
     dp_netdev_append_offload(item, tid);
 }
 
+// 根据 flow offload task 来删除对应的 flow
 static int
 dp_netdev_flow_offload_del(struct dp_offload_thread_item *item)
 {
@@ -2794,6 +2798,7 @@ dp_netdev_flow_offload_del(struct dp_offload_thread_item *item)
  * For flow modification, both flow mark and the associations are still
  * valid, thus only item 2 needed.
  */
+// 获取一个 flow offload task, 并将对应的 flow offload 到硬件上
 static int
 dp_netdev_flow_offload_put(struct dp_offload_thread_item *item)
 {
@@ -2924,6 +2929,7 @@ dp_offload_flush(struct dp_offload_thread_item *item)
 #define DP_NETDEV_OFFLOAD_BACKOFF_MAX 64
 #define DP_NETDEV_OFFLOAD_QUIESCE_INTERVAL_US (10 * 1000) /* 10 ms */
 
+// offload thread 的主循环, 不断从 queue 里取 offload 任务并处理
 static void *
 dp_netdev_flow_offload_main(void *arg)
 {
@@ -2948,6 +2954,9 @@ dp_netdev_flow_offload_main(void *arg)
             }
         }
 
+        // 核心逻辑: 从一个 queue 里拿 offload 任务, 然后根据类型处理:
+        // DP_OFFLOAD_FLOW:  ADD/MOD/DEL 某个 item
+        // DP_OFFLAOD_FLUSH: FLUSH 某个 netdev 上的 flows
         next_rcu = time_usec() + DP_NETDEV_OFFLOAD_QUIESCE_INTERVAL_US;
         MPSC_QUEUE_FOR_EACH_POP (node, queue) {
             offload = CONTAINER_OF(node, struct dp_offload_thread_item, node);

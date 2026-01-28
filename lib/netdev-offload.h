@@ -48,7 +48,7 @@ struct ovs_action_push_tnl;
 struct netdev_hw_info {
     bool oor;		/* Out of Offload Resources ? */
     atomic_bool miss_api_supported;  /* hw_miss_packet_recover() supported.*/
-    int offload_count;  /* Pending (non-offloaded) flow count */
+    int offload_count;  /* Pending (non-offloaded) flow count */ // typo ???
     int pending_count;  /* Offloaded flow count */
     OVSRCU_TYPE(void *) offload_data; /* Offload metadata. */
 };
@@ -84,15 +84,19 @@ struct offload_info {
 
 DECLARE_EXTERN_PER_THREAD_DATA(unsigned int, netdev_offload_thread_id);
 
+// offload thread 的数量
 unsigned int netdev_offload_thread_nb(void);
 unsigned int netdev_offload_thread_init(void);
-unsigned int netdev_offload_ufid_to_thread_id(const ovs_u128 ufid);
+unsigned int netdev_offload_ufid_to_thread_id(const ovs_u128 ufid); // 说明有一个 ufid->offload thread id 的映射关系. ufid: unique flow id
 
 static inline unsigned int
 netdev_offload_thread_id(void)
 {
+    //ref: DECLARE_EXTERN_PER_THREAD_DATA(unsigned int, netdev_offload_thread_id);
     unsigned int id = *netdev_offload_thread_id_get();
 
+
+    // init once 的模式, 在 flow 卸载路径需要的时候创建对应 flow offload thread
     if (OVS_UNLIKELY(id == OVSTHREAD_ID_UNSET)) {
         id = netdev_offload_thread_init();
     }
