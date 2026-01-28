@@ -51,7 +51,7 @@ struct netdev_flow_key {
 // - 可以认为其是一条 megaflow
 //
 // 插入: dpcls_insert()
-// 删除: dpcls_remove() / dpcls_destroy() revalidator线程负责的, %udpif_revalidator()
+// 删除: dpcls_remove() revalidator线程负责的, %udpif_revalidator()
 //
 // Q: megaflow 删除的时候, 底层关联的 emc, smc 怎么处理?
 //    * emc 引用 dp_netdev_flow (i.e. megaflow) 的时候有引用计数, megaflow 删除的时候, megaflow 不会释放会被标记为 dead, 后续回收 emc 的时候才释放
@@ -79,6 +79,7 @@ uint32_t (*dpcls_subtable_lookup_func)(struct dpcls_subtable *subtable,
 
 /* A set of rules that all have the same fields wildcarded. */
 // 组织 megaflow(i.e. dpcls_rule) 的表, 即具有相同 mask 的 megaflow 组织在一起
+// ref: dpcls_create_subtable
 struct dpcls_subtable {
     /* The fields are only used by writers. */
     struct cmap_node cmap_node OVS_GUARDED; /* Within dpcls 'subtables_map'. */
@@ -92,7 +93,7 @@ struct dpcls_subtable {
      * are used to select the actual dpcls lookup implementation at subtable
      * creation time.
      */
-    uint8_t mf_bits_set_unit0;
+    uint8_t mf_bits_set_unit0;	// ref: dpcls_create_subtable()
     uint8_t mf_bits_set_unit1;
 
     /* The lookup function to use for this subtable. If there is a known

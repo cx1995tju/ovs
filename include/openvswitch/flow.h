@@ -96,6 +96,9 @@ BUILD_ASSERT_DECL(FLOW_MAX_VLAN_HEADERS % 2 == 0);
  *
  * NOTE: Order of the fields is significant, any change in the order must be
  * reflected in miniflow_extract()!
+ *
+ *
+ * 672Bytes
  */
 struct flow {
     /* Metadata */

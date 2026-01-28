@@ -301,6 +301,7 @@ DECLARE_OPTIMIZED_LOOKUP_FUNCTION(4, 0)
  * @retval Non-NULL A valid function to handle the miniflow bit pattern
  * @retval NULL The requested miniflow is not supported by this implementation.
  */
+// 为 subtable 选择一个最合适的 lookup 函数
 dpcls_subtable_lookup_func
 dpcls_subtable_generic_probe(uint32_t u0_bits, uint32_t u1_bits)
 {

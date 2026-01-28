@@ -516,7 +516,7 @@ flowmap_next_index(struct flowmap_aux *aux, size_t *idx)
  * at least as many elements as there are 1-bits in maps. */
 
 // miniflow 里的 每个 bit 对应 flow 这个结构的一个 uint64_t (8Byte)
-// - 一个 bit 为 0 的话, 表示, flow 里的那 u64 是 0
+// - 一个 bit 为 0 的话, 表示, flow 里的对应的那个 u64 是 0
 // - 对于那些 bit 不为 0 的 u64, 会将其 value 保存在 map 后面的内存里
 //
 // 综上: miniflow 就是 flow 这个结构的压缩表示, 压缩的基本单位是 u64, 使用 map 这个 bitmap 来表示哪些 u64 是0

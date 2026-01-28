@@ -32,6 +32,7 @@ extern "C" {
 //
 // egress 方向是 action 设置的, 在翻译了 output action 后才有的 ???
 //
+// 344Byte
 struct flow_tnl {
     ovs_be32 ip_dst;
     struct in6_addr ipv6_dst;

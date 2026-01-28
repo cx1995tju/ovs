@@ -4155,6 +4155,7 @@ dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
     return 0;
 }
 
+// revalidator 线程通过 push_dp_ops() 将删除操作递交到这里
 static void
 dpif_netdev_operate(struct dpif *dpif, struct dpif_op **ops, size_t n_ops,
                     enum dpif_offload_type offload_type OVS_UNUSED)
@@ -6842,7 +6843,7 @@ dp_netdev_destroy_pmd(struct dp_netdev_pmd_thread *pmd)
     free(pmd->busy_cycles_intrvl);
     /* All flows (including their dpcls_rules) have been deleted already */
     CMAP_FOR_EACH (cls, node, &pmd->classifiers) {
-        dpcls_destroy(cls);
+        dpcls_destroy(cls); // 只有 pmd 被 destroy 的时候才删除 dpcls
         ovsrcu_postpone(free, cls);
     }
     cmap_destroy(&pmd->classifiers);
@@ -9181,11 +9182,15 @@ dpcls_create_subtable(struct dpcls *cls, const struct netdev_flow_key *mask)
     /* The count of bits in the mask defines the space required for masks.
      * Then call gen_masks() to create the appropriate masks, avoiding the cost
      * of doing runtime calculations. */
+    // 大部分报文只会匹配 struct flow 的前 128 * 8 = 1024Bytes, 这里的 unit0 +
+    // unit1 就统计出了实际的数据位数
     uint32_t unit0 = count_1bits(mask->mf.map.bits[0]);
     uint32_t unit1 = count_1bits(mask->mf.map.bits[1]);
     subtable->mf_bits_set_unit0 = unit0;
     subtable->mf_bits_set_unit1 = unit1;
     subtable->mf_masks = xmalloc(sizeof(uint64_t) * (unit0 + unit1));
+    // 初始化 subtable->mf_masks
+    // subtable->mf_masks 前 uint0 + uint1 个元素存储了 mask->mf.map 里为 1 的 bit 的位置
     dpcls_flow_key_gen_masks(mask, subtable->mf_masks, unit0, unit1);
 
     /* Get the preferred subtable search function for this (u0,u1) subtable.
@@ -9370,6 +9375,9 @@ static inline void
 dpcls_flow_key_gen_mask_unit(uint64_t iter, const uint64_t count,
                              uint64_t *mf_masks)
 {
+	// 记录下了 iter 中的哪些 bit 是 1
+	// iter 中一共有 count 个 bit 为 1
+	// mf_masks 的前 count 个元素, 分别记录下每个 1 bit 位置的掩码
     int i;
     for (i = 0; i < count; i++) {
         uint64_t lowest_bit = (iter & -iter);
@@ -9397,7 +9405,9 @@ dpcls_flow_key_gen_masks(const struct netdev_flow_key *tbl,
     uint64_t iter_u0 = tbl->mf.map.bits[0];
     uint64_t iter_u1 = tbl->mf.map.bits[1];
 
+    // mf_masks 前 mf_bits_u0 个元素, 记录 unit0 中每个 1 bit 位置的掩码
     dpcls_flow_key_gen_mask_unit(iter_u0, mf_bits_u0, &mf_masks[0]);
+    // 然后继续从个mf_masks[mf_bits_u0] 开始, 记录 unit1 中每个 1 bit 位置的掩码
     dpcls_flow_key_gen_mask_unit(iter_u1, mf_bits_u1, &mf_masks[mf_bits_u0]);
 }
 
@@ -9464,9 +9474,10 @@ dpcls_lookup(struct dpcls *cls, const struct netdev_flow_key *keys[],
      * search-key against each subtable, but when a match is found for a
      * search-key, the search for that key can stop because the rules are
      * non-overlapping. */		// 重要, non-overlapping
+					// 很粗暴, 遍历 subtable
     PVECTOR_FOR_EACH (subtable, &cls->subtables) {
         /* Call the subtable specific lookup function. */
-        found_map = subtable->lookup_func(subtable, keys_map, keys, rules); // %lookup_generic_impl()
+        found_map = subtable->lookup_func(subtable, keys_map, keys, rules); // %dpcls_subtable_lookup_generic() -> lookup_generic_impl()
 
         /* Count the number of subtables searched for this packet match. This
          * estimates the "spread" of subtables looked at per matched packet. */

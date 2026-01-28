@@ -103,7 +103,7 @@ dpcls_subtable_get_best_impl(uint32_t u0_bit_count, uint32_t u1_bit_count)
     for (int i = 0; i < ARRAY_SIZE(subtable_lookups); i++) {
         int32_t probed_prio = subtable_lookups[i].prio;
         if (probed_prio > prio) {
-            dpcls_subtable_lookup_func probed_func;
+            dpcls_subtable_lookup_func probed_func; // dpcls_subtable_generic_probe()
             probed_func = subtable_lookups[i].probe(u0_bit_count,
                                     u1_bit_count);
             if (probed_func) {
