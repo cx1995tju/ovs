@@ -8251,6 +8251,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                     packet->md.in_port.odp_port = portno;	// 注意: 这里修改了 in port port number
                 }
 
+		// 从这里可以看出来 RECIRC 不完全等同于 jump 的, 因为这里是递归. recirc 处理完后还会回来
+		// 只有 recirc 是 last  action 才等同于 jump
                 (*depth)++;
                 dp_netdev_recirculate(pmd, packets_); // 头部剥离后, 重新进到数据面查流表处理处理
                 (*depth)--;
