@@ -50,7 +50,7 @@ struct netdev_hw_info {
     atomic_bool miss_api_supported;  /* hw_miss_packet_recover() supported.*/
     int offload_count;  /* Pending (non-offloaded) flow count */ // typo ???
     int pending_count;  /* Offloaded flow count */
-    OVSRCU_TYPE(void *) offload_data; /* Offload metadata. */
+    OVSRCU_TYPE(void *) offload_data; /* Offload metadata. */ // ref: struct netdev_offload_dpdk_data
 };
 
 enum hw_info_type {

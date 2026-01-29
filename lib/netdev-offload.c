@@ -148,6 +148,8 @@ DEFINE_EXTERN_PER_THREAD_DATA(netdev_offload_thread_id, OVSTHREAD_ID_UNSET);
 static struct ovs_mutex netdev_flow_api_provider_mutex = OVS_MUTEX_INITIALIZER;
 
 /* Contains 'struct netdev_registered_flow_api's. */
+// %netdev_offload_dpdk
+// %netdev_offload_tc
 static struct cmap netdev_flow_apis = CMAP_INITIALIZER;
 
 struct netdev_registered_flow_api {
@@ -275,6 +277,7 @@ netdev_assign_flow_api(struct netdev *netdev)
     return -1;
 }
 
+// only ovs-kernel use it now
 void
 meter_offload_set(ofproto_meter_id meter_id,
                   struct ofputil_meter_config *config)
@@ -566,11 +569,13 @@ static struct ovs_rwlock ifindex_to_port_rwlock = OVS_RWLOCK_INITIALIZER;
 static struct ovs_rwlock port_to_netdev_rwlock
     OVS_ACQ_BEFORE(ifindex_to_port_rwlock) = OVS_RWLOCK_INITIALIZER;
 
+    // 保存了所有支持卸载的 port
 static struct hmap port_to_netdev OVS_GUARDED_BY(port_to_netdev_rwlock)
     = HMAP_INITIALIZER(&port_to_netdev);
 static struct hmap ifindex_to_port OVS_GUARDED_BY(ifindex_to_port_rwlock)
     = HMAP_INITIALIZER(&ifindex_to_port);
 
+    // map: dpif_port.port_no -> netdev
 struct port_to_netdev_data {
     struct hmap_node portno_node; /* By (dpif_type, dpif_port.port_no). */
     struct hmap_node ifindex_node; /* By (dpif_type, ifindex). */
@@ -788,6 +793,7 @@ netdev_ports_lookup(odp_port_t port_no, const char *dpif_type)
 {
     struct port_to_netdev_data *data;
 
+    // 遍历 port_to_netdev 表, 找到一个 port_to_netdev_data
     HMAP_FOR_EACH_WITH_HASH (data, portno_node,
                              netdev_ports_hash(port_no, dpif_type),
                              &port_to_netdev) {

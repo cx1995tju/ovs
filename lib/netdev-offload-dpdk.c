@@ -1,3 +1,50 @@
+/* 核心结构:
+ * flow 的组织
+ * - struct ufid_to_rte_flow_data
+ *   - map: ufid -> rte_flow
+ * - struct netdev_offload_dpdk_data
+ *   - per-device 的 offload data. 主要就是记录 ufid -> rte_flow 的 map
+ *     - 增: offload_data_init()
+ *     - 删: offload_data_destroy()
+ *     - 改:
+ *       - ufid_to_rte_flow_associate() 建立 ufid —> rte_flow 关系
+ *       - ufid_to_rte_flow_disassociate() 拆除 ufid —> rte_flow 关系    
+ *
+ *
+ * flow 相关结构:
+ * - struct flow_patterns
+ *   - rte_flow_item 的封装咯
+ * - struct flow_actions
+ *   - rte_flow_action 的封装咯
+ *
+ *
+ * 提供的外部接口: 通过 netdev_offload_dpdk 提供给 netdev-offload 层的 callback
+ * - init / uninit: 
+ *   - netdev_offload_dpdk_init_flow_api
+ *   - netdev_offload_dpdk_uninit_flow_api
+ * - flow 的增删改查:
+ *   - netdev_offload_dpdk_flow_put
+ *   - netdev_offload_dpdk_flow_del
+ *   - netdev_offload_dpdk_flow_get
+ *   - netdev_offload_dpdk_flow_flush
+ *   - netdev_offload_dpdk_get_n_flows
+ *   - netdev_offload_dpdk_hw_miss_packet_recover
+ *
+ *
+ *
+ * 调用的外部接口
+ * - netdev-offload 层的接口
+ *
+ *
+ *
+ * 最核心函数:
+ * - parse_flow_match()
+ * - parse_flow_actions()
+ *
+ *
+ * */
+
+
 /*
  * Copyright (c) 2014, 2015, 2016, 2017 Nicira, Inc.
  * Copyright (c) 2019 Mellanox Technologies, Ltd.
@@ -63,14 +110,24 @@ struct ufid_to_rte_flow_data {
     struct rte_flow *rte_flow;
     bool actions_offloaded;
     struct dpif_flow_stats stats;
+
+    /* ref: 507d20e77bfe9093e6492ad4504761224a2910de */
+    /* Vports are virtual, OVS only logical devices, so rte_flows cannot be */
+    /* applied as is on them. Instead, apply the rules the physical port from */
+    /* which the packet has arrived, provided by orig_in_port field.
+     *
+     * vport: 比如对应的 vxlan 等隧道 port, ref: add_vport_match()
+     *
+     * */
     struct netdev *physdev;
     struct ovs_mutex lock;
     unsigned int creation_tid;
     bool dead;
 };
 
+// per-device 的 offload 信息
 struct netdev_offload_dpdk_data {
-    struct cmap ufid_to_rte_flow;
+    struct cmap ufid_to_rte_flow;  // 关键: 记录 ufid -> rte_flow 的 map   
     uint64_t *rte_flow_counters;
     struct ovs_mutex map_lock;
 };
@@ -178,6 +235,7 @@ ufid_to_rte_flow_data_find(struct netdev *netdev,
         return NULL;
     }
 
+    // 遍历 map 查找咯
     CMAP_FOR_EACH_WITH_HASH (data, node, hash, map) {
         if (ovs_u128_equals(*ufid, data->ufid)) {
             return data;
@@ -210,6 +268,7 @@ ufid_to_rte_flow_data_find_protected(struct netdev *netdev,
     return NULL;
 }
 
+// 建立 ufid -> rte_flow 的关联关系
 static inline struct ufid_to_rte_flow_data *
 ufid_to_rte_flow_associate(const ovs_u128 *ufid, struct netdev *netdev,
                            struct netdev *physdev, struct rte_flow *rte_flow,
@@ -286,6 +345,8 @@ ufid_to_rte_flow_disassociate(struct ufid_to_rte_flow_data *data)
  * To avoid individual xrealloc calls for each new element, a 'curent_max'
  * is used to keep track of current allocated number of elements. Starts
  * by 8 and doubles on each xrealloc call.
+ *
+ * ref: add_flow_pattern
  */
 struct flow_patterns {
     struct rte_flow_item *items;
@@ -298,10 +359,12 @@ struct flow_patterns {
     struct ds s_tnl;
 };
 
+// ref: add_flow_action
 struct flow_actions {
     struct rte_flow_action *actions;
     int cnt;
     int current_max;
+    // XXX: 对于 tunnel action 有更多信息需要记录
     struct netdev *tnl_netdev;
     /* tnl_pmd_actions is the opaque array of actions returned by the PMD. */
     struct rte_flow_action *tnl_pmd_actions;
@@ -892,6 +955,7 @@ dump_flow(struct ds *s, struct ds *s_extra,
     return s;
 }
 
+// 简单 rte_flow_create 的封装
 static struct rte_flow *
 netdev_offload_dpdk_flow_create(struct netdev *netdev,
                                 const struct rte_flow_attr *attr,
@@ -943,6 +1007,7 @@ netdev_offload_dpdk_flow_create(struct netdev *netdev,
     return flow;
 }
 
+// 构建 flow patterns, 就是分配 rte_flow_item 数组并填充
 static void
 add_flow_pattern(struct flow_patterns *patterns, enum rte_flow_item_type type,
                  const void *spec, const void *mask, const void *last)
@@ -966,6 +1031,7 @@ add_flow_pattern(struct flow_patterns *patterns, enum rte_flow_item_type type,
     patterns->cnt++;
 }
 
+// 构建 flow patterns, 就是分配 rte_flow_actions 数组并填充
 static void
 add_flow_action(struct flow_actions *actions, enum rte_flow_action_type type,
                 const void *conf)
@@ -987,6 +1053,7 @@ add_flow_action(struct flow_actions *actions, enum rte_flow_action_type type,
     actions->cnt++;
 }
 
+// tnl actions 和 tnl items 需要特殊处理, 因为要多记录一些信息
 static void
 add_flow_tnl_actions(struct flow_actions *actions,
                      struct netdev *tnl_netdev,
@@ -1090,6 +1157,9 @@ free_flow_actions(struct flow_actions *actions)
     ds_destroy(&actions->s_tnl);
 }
 
+// 从 vport 里提取信息来填充用于卸载的 tunnel 相关结构体
+// dpdk 给 tunnel 相关的卸载提供了特殊接口: ref: rte_flow_tunnel_decap_set()
+// ref: https://doc.dpdk.org/guides-25.07/prog_guide/ethdev/flow_offload.html#generic-flow-api:~:text=1.3.8.3.%20Tunneled%20traffic%20offload
 static int
 vport_to_rte_tunnel(struct netdev *vport,
                     struct rte_flow_tunnel *tunnel,
@@ -1109,6 +1179,7 @@ vport_to_rte_tunnel(struct netdev *vport,
         tunnel->is_ipv6 = true;
     }
 
+    // geneve 的卸载还没有支持
     if (!strcmp(netdev_get_type(vport), "vxlan")) {
         tunnel->type = RTE_FLOW_ITEM_TYPE_VXLAN;
         tunnel->tp_dst = tnl_cfg->dst_port;
@@ -1131,7 +1202,9 @@ vport_to_rte_tunnel(struct netdev *vport,
     return 0;
 }
 
-static int
+// 能够调用到这里, 说明 orig_in_port里收到了隧道流量
+// 那么一个 vport 就可以关联到 orig_in_port 这个物理设备
+// ref: dpdk 9ec0f97e02e19c7acec5ebc9e472b8a2f4605e1f
 add_vport_match(struct flow_patterns *patterns,
                 odp_port_t orig_in_port,
                 struct netdev *tnldev)
@@ -1160,6 +1233,7 @@ add_vport_match(struct flow_patterns *patterns,
                     error.message);
         goto out;
     }
+    // 获得了用于隧道卸载的 items 后, 添到 patterns 里
     add_flow_tnl_items(patterns, physdev, tnl_pmd_items, tnl_pmd_items_cnt);
 
 out:
@@ -1167,11 +1241,15 @@ out:
     return ret;
 }
 
+// 从 match 里提取 outer ip layer 信息, 来生成 rte_flow_item_ipv4/ipv6 spec 和 mask
 static int
 parse_tnl_ip_match(struct flow_patterns *patterns,
                    struct match *match,
                    uint8_t proto)
 {
+    // 利用 match 中存储的信息, 来初始化一个 rte_flow_item_ipv4 spec 和 mask
+    // 这个 spec 用来匹配 outer ip layer 的
+    // 然后将 spec 和 mask 添加到 patterns 里
     struct flow *consumed_masks;
 
     consumed_masks = &match->wc.masks;
@@ -1244,6 +1322,7 @@ parse_tnl_ip_match(struct flow_patterns *patterns,
     return 0;
 }
 
+// 从 match 里提取 outer udp layer 信息, 来生成 rte_flow_item_udp spec 和 mask
 static void
 parse_tnl_udp_match(struct flow_patterns *patterns,
                     struct match *match)
@@ -1268,6 +1347,7 @@ parse_tnl_udp_match(struct flow_patterns *patterns,
     add_flow_pattern(patterns, RTE_FLOW_ITEM_TYPE_UDP, spec, mask, NULL);
 }
 
+// 构建 patterns: ip layer + udp layer + vxlan layer
 static int
 parse_vxlan_match(struct flow_patterns *patterns,
                   struct match *match)
@@ -1300,6 +1380,7 @@ parse_vxlan_match(struct flow_patterns *patterns,
     return 0;
 }
 
+// 构建针对 gre 的 patterns: ip layer + gre layer (+ key layer)
 static int
 parse_gre_match(struct flow_patterns *patterns,
                 struct match *match)
@@ -1361,6 +1442,7 @@ parse_flow_tnl_match(struct netdev *tnldev,
 {
     int ret;
 
+    // 先添加一个 vendor spec 的 pmd patterns
     ret = add_vport_match(patterns, orig_in_port, tnldev);
     if (ret) {
         return ret;
@@ -1376,6 +1458,9 @@ parse_flow_tnl_match(struct netdev *tnldev,
     return ret;
 }
 
+// 利用 match 信息来构建 patterns
+//
+// 核心函数
 static int
 parse_flow_match(struct netdev *netdev,
                  odp_port_t orig_in_port OVS_UNUSED,
@@ -1394,13 +1479,15 @@ parse_flow_match(struct netdev *netdev,
 
     patterns->physdev = netdev;
 #ifdef ALLOW_EXPERIMENTAL_API /* Packet restoration API required. */
+    // 如果是隧道流量走这条路径先把 outer layer 的 pattern 创建了
     if (netdev_vport_is_vport_class(netdev->netdev_class) &&
         parse_flow_tnl_match(netdev, patterns, orig_in_port, match)) {
         return -1;
     }
 #endif
+    // why? 为什么重置掉 in_port
     memset(&consumed_masks->in_port, 0, sizeof consumed_masks->in_port);
-    /* recirc id must be zero. */
+    /* recirc id must be zero. */ // 对于 recirc 的 packet 无法卸载. 一个报文应该第一次进来时候就被卸载了
     if (match->wc.masks.recirc_id & match->flow.recirc_id) {
         return -1;
     }
@@ -1702,6 +1789,9 @@ parse_flow_match(struct netdev *netdev,
     return 0;
 }
 
+// actions 里添加一个 mark / rss action
+// 这个 action 为什么是一个兜底机制 ???
+// 利用 mark 机制来加速软件查找 flow 咯, ref: dp_netdev_hw_flow()
 static void
 add_flow_mark_rss_actions(struct flow_actions *actions,
                           uint32_t flow_mark,
@@ -1771,6 +1861,7 @@ netdev_offload_dpdk_mark_rss(struct flow_patterns *patterns,
     return flow;
 }
 
+// 对 flow 做统计
 static void
 add_count_action(struct flow_actions *actions)
 {
@@ -1779,6 +1870,7 @@ add_count_action(struct flow_actions *actions)
     add_flow_action(actions, RTE_FLOW_ACTION_TYPE_COUNT, count);
 }
 
+// 流量送到 REPRESENTED_PORT
 static int
 add_represented_port_action(struct flow_actions *actions,
                             struct netdev *outdev)
@@ -1880,6 +1972,7 @@ BUILD_ASSERT_DECL(sizeof(struct rte_flow_action_set_tp) ==
 BUILD_ASSERT_DECL(sizeof(struct rte_flow_action_set_tp) ==
                   MEMBER_SIZEOF(struct ovs_key_udp, udp_dst));
 
+// 处理 set action, 这是最多的额action 了
 static int
 parse_set_actions(struct flow_actions *actions,
                   const struct nlattr *set_actions,
@@ -2101,6 +2194,7 @@ parse_clone_actions(struct netdev *netdev,
     const struct nlattr *ca;
     unsigned int cleft;
 
+    // 遍历 clone 的 subaction, 只支持 push_tunnel / output 的卸载
     NL_ATTR_FOR_EACH_UNSAFE (ca, cleft, clone_actions, clone_actions_len) {
         int clone_type = nl_attr_type(ca);
 
@@ -2130,6 +2224,7 @@ add_jump_action(struct flow_actions *actions, uint32_t group)
     add_flow_action(actions, RTE_FLOW_ACTION_TYPE_JUMP, jump);
 }
 
+// ref: dpdk 9ec0f97e02e19c7acec5ebc9e472b8a2f4605e1f
 static int OVS_UNUSED
 add_tnl_pop_action(struct netdev *netdev,
                    struct flow_actions *actions,
@@ -2170,6 +2265,7 @@ add_tnl_pop_action(struct netdev *netdev,
      * equivalent to recirc_id, thus jump to group 0 is added to instruct the
      * the HW to proceed processing.
      */
+    // decap 后 recirculate 后重新匹配.  decap 相关的 tnl_pmd_actions 是 vendor-spec 的
     add_jump_action(actions, 0);
     return 0;
 }
@@ -2287,17 +2383,21 @@ netdev_offload_dpdk_add_flow(struct netdev *netdev,
     bool actions_offloaded = true;
     struct rte_flow *flow;
 
+    // 处理 patterns
     if (parse_flow_match(netdev, info->orig_in_port, &patterns, match)) {
         VLOG_DBG_RL(&rl, "%s: matches of ufid "UUID_FMT" are not supported",
                     netdev_get_name(netdev), UUID_ARGS((struct uuid *) ufid));
         goto out;
     }
 
+    // 处理 actions
     flow = netdev_offload_dpdk_actions(patterns.physdev, &patterns, nl_actions,
                                        actions_len);
     if (!flow && !netdev_vport_is_vport_class(netdev->netdev_class)) {
         /* If we failed to offload the rule actions fallback to MARK+RSS
          * actions.
+         *
+         * 也就是说, 仅仅利用硬件的 mark 功能来加速软件的查找咯
          */
         flow = netdev_offload_dpdk_mark_rss(&patterns, netdev,
                                             info->flow_mark);

@@ -6486,6 +6486,8 @@ netdev_dpdk_rte_flow_query_count(struct netdev *netdev,
 
 #ifdef ALLOW_EXPERIMENTAL_API
 
+// 调用这个函数, 向底层 driver 去获取用于隧道卸载的最优的 items
+// ref: dpdk dpdk 9ec0f97e02e19c7acec5ebc9e472b8a2f4605e1f
 int
 netdev_dpdk_rte_flow_tunnel_decap_set(struct netdev *netdev,
                                       struct rte_flow_tunnel *tunnel,
@@ -6508,6 +6510,8 @@ netdev_dpdk_rte_flow_tunnel_decap_set(struct netdev *netdev,
     return ret;
 }
 
+// 调用这个函数, 向底层 driver 去获取用于隧道卸载的最优的 items
+// ref: dpdk dpdk 9ec0f97e02e19c7acec5ebc9e472b8a2f4605e1f
 int
 netdev_dpdk_rte_flow_tunnel_match(struct netdev *netdev,
                                   struct rte_flow_tunnel *tunnel,
