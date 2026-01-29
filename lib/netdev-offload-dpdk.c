@@ -1488,6 +1488,7 @@ parse_flow_match(struct netdev *netdev,
     // why? 为什么重置掉 in_port
     memset(&consumed_masks->in_port, 0, sizeof consumed_masks->in_port);
     /* recirc id must be zero. */ // 对于 recirc 的 packet 无法卸载. 一个报文应该第一次进来时候就被卸载了
+    // 目前不支持 recirc 的流量卸载
     if (match->wc.masks.recirc_id & match->flow.recirc_id) {
         return -1;
     }
