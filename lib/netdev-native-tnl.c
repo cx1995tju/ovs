@@ -184,6 +184,7 @@ ip_extract_tnl_md(struct dp_packet *packet, struct flow_tnl *tnl,
  * offsets in the 'packet'.
  *
  * Return pointer to the L4 header added to 'packet'. */
+// 这里将 data->headr 完整 copy 到 pakcet 里了(eth, ip, udp)
 void *
 netdev_tnl_push_ip_header(struct dp_packet *packet, const void *header,
                           int size, int *ip_tot_size, ovs_be32 ipv6_label)
@@ -324,13 +325,14 @@ netdev_tnl_push_udp_header(const struct netdev *netdev OVS_UNUSED,
     udp_src = netdev_tnl_get_src_port(packet);
 
     dp_packet_tnl_ol_process(packet, data);
+    // 这里将 data->headr 完整 copy 到 pakcet 里了(eth, ip, udp)
     udp = netdev_tnl_push_ip_header(packet, data->header, data->header_len,
                                     &ip_tot_size, 0);
 
     udp->udp_src = udp_src;
     udp->udp_len = htons(ip_tot_size);
 
-    if (udp->udp_csum) {
+    if (udp->udp_csum) { // 谁会在种类设置 udp_csum 的?
         dp_packet_ol_reset_l4_csum_good(packet);
         if (dp_packet_hwol_is_tunnel_geneve(packet) ||
             dp_packet_hwol_is_tunnel_vxlan(packet)) {
