@@ -406,27 +406,43 @@ int ofproto_port_set_rstp(struct ofproto *, ofp_port_t ofp_port,
         const struct ofproto_port_rstp_settings *);
 
 /* The behaviour of the port regarding VLAN handling */
+
+// native vlan = 10, 允许 valn 是 10, 20, 30
+// 行为                     TRUNK                            NATIVE_TAGGED      NATIVE_UNTAGGED
+//----------------------------------------------------------------------------------------------
+// 收到无标签报文           按 VLAN 0 处理，需允许 VLAN 0    归入 VLAN 10       归入 VLAN 10
+//----------------------------------------------------------------------------------------------
+// 收到 VLAN 10 标签        归入 VLAN 10                     归入 VLAN 10       归入 VLAN 10
+//----------------------------------------------------------------------------------------------
+// 收到 VLAN 20 标签        归入 VLAN 20                     归入 VLAN 20       归入 VLAN 20
+//----------------------------------------------------------------------------------------------
+// 发出内部 VLAN 10 报文    带 VLAN 10 标签                  带 VLAN 10 标签    不带 VLAN 标签
+//----------------------------------------------------------------------------------------------
+// 发出内部 VLAN 20 报文    带 VLAN 20 标签                  带 VLAN 20 标签    带 VLAN 20 标签
+ 
+// 注意从 交换机的时间看 output/intput, 不要从 Host 视角
 enum port_vlan_mode {
     /* This port is an access port.  'vlan' is the VLAN ID.  'trunks' is
      * ignored. */
-    PORT_VLAN_ACCESS,
+    PORT_VLAN_ACCESS, // access 口, 对应 ovsdb 的 tag 来配置
 
     /* This port is a trunk.  'trunks' is the set of trunks. 'vlan' is
      * ignored. */
-    PORT_VLAN_TRUNK,
+    PORT_VLAN_TRUNK, // 默认所有, 配置了的话, 可以通过多个 vlan. 对应 OVSDB 的 tag 来配置
 
     /* Untagged incoming packets are part of 'vlan', as are incoming packets
      * tagged with 'vlan'.  Outgoing packets tagged with 'vlan' stay tagged.
      * Other VLANs in 'trunks' are trunked. */
-    PORT_VLAN_NATIVE_TAGGED,
+    PORT_VLAN_NATIVE_TAGGED, // ovsdb 的 tag 来配置
 
     /* Untagged incoming packets are part of 'vlan', as are incoming packets
      * tagged with 'vlan'.  Outgoing packets tagged with 'vlan' are untagged.
      * Other VLANs in 'trunks' are trunked. */
-    PORT_VLAN_NATIVE_UNTAGGED,
+    PORT_VLAN_NATIVE_UNTAGGED, // ovsdb 的 tag 来配置
 
     /* 802.1q tunnel port. Incoming packets are added an outer vlan tag
      * 'vlan'. If 'cvlans' is set, only allows VLANs in 'cvlans'. */
+    // 入方向增加外层, 出方向移除外层 vlan, 保留客户 vlan
     PORT_VLAN_DOT1Q_TUNNEL
 };
 

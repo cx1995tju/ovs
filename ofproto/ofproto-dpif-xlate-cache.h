@@ -135,6 +135,10 @@ struct xc_entry {
          ENTRY;                                                 \
          ENTRY = ofpbuf_try_pull(ENTRIES, sizeof *ENTRY))
 
+
+// 缓存一些统计/状态. revalidator 线程会使用
+// 记录了 revalidator 将各种统计和信息要发送给谁
+// revalidator 遍历所有的 xlate_cache, 就可以完成传输
 struct xlate_cache {
     struct ofpbuf entries;
 };

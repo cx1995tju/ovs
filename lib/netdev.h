@@ -77,13 +77,13 @@ enum netdev_pt_mode {
      * only a single kind of packet (such as a virtual or physical Ethernet
      * interface) and for those that can handle multiple (such as VXLAN-GPE or
      * Geneve). */
-    NETDEV_PT_AWARE,
+    NETDEV_PT_AWARE, // 接口理解 packet_type, 按照自身能力处理对应报文
 
     /* The netdev sends and receives only Ethernet frames.  The netdev cannot
      * carry packets other than Ethernet frames.  This is a legacy mode for
      * backward compability with controllers that are not prepared to handle
      * OpenFlow 1.5+ "packet_type". */
-    NETDEV_PT_LEGACY_L2,
+    NETDEV_PT_LEGACY_L2, // 传统 L2, 只处理 ethernet
 
     /* The netdev sends and receives only IPv4 and IPv6 packets.  The netdev
      * cannot carry Ethernet frames or other kinds of packets.
@@ -94,7 +94,7 @@ enum netdev_pt_mode {
      * stripped.  This is a legacy mode for backward compability with
      * controllers that are not prepared to handle OpenFlow 1.5+
      * "packet_type". */
-    NETDEV_PT_LEGACY_L3,
+    NETDEV_PT_LEGACY_L3, // 传统 L3, 只处理 ipv4 ipv6. 以太网报文进来后, 头会被去除掉
 };
 
 /* Configuration specific to tunnels. */

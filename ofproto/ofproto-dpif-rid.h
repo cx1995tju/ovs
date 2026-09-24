@@ -154,7 +154,7 @@ struct frozen_state {
     mirror_mask_t mirrors;        /* Mirrors already output. */
     bool conntracked;             /* Conntrack occurred prior to freeze. */
     bool was_mpls;                /* MPLS packet */
-    struct uuid xport_uuid;       /* UUID of 1st port packet received on. */
+    struct uuid xport_uuid;       /* UUID of 1st port packet received on. */ // 为什么保存的是 uuid 不是, xport 指针. 因为更新配置的时候 xport 会重新创建并复制, 指针会变化
 
     /* Actions to be translated when thawing. */
     struct ofpact *ofpacts;

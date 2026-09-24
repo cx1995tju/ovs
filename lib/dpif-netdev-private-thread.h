@@ -100,6 +100,8 @@ struct dp_netdev_pmd_thread {
      */
     struct ovs_mutex flow_mutex;
     // concurrent hash map
+    // ref: should_install_flow() 数据面 flow 数量受到 flow_limit 参数限制的
+    // 当然限制的不是某个 PMD 的, 而是整个 datapath 的
     struct cmap flow_table OVS_GUARDED; /* Flow table. */	// datapath 中所有的 flow 都在这里，是 per-pmd, 保存的是 dp_netdev_flow 结构. 一个 cmap node 节点保存的都是相同 hash 值的 flow。
 
     /* One classifier per in_port polled by the pmd */

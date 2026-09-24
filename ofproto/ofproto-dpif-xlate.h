@@ -38,6 +38,8 @@ struct mac_learning;
 struct mcast_snooping;
 struct xlate_cache;
 
+// 返回翻译的一些附加结果
+// action/ wildcard 都是通过 xlate_in 里提供的 buffer 返回的
 struct xlate_out {
     /* Caching exceptions:
      *
@@ -56,29 +58,42 @@ struct xlate_out {
      *
      * If 'avoid_caching' is true then 'slow' doesn't matter.
      */
+    // 非 0 时 表示返回的 翻译后的 flow 其中的 action 会将 pkt 再次引导到慢速路径处理(send-to-userspace action)
+    // 这里记录了原因.
     enum slow_path_reason slow;
-    bool avoid_caching;
+    // revalidate 的时候, 因为没有实际的 pkt, 不能执行 learn 这样 action 的副作用, 那么这里就不安装 datapath flow
+    // 等到实际报文来的时候, 再重新 upcall 学习咯
+    bool avoid_caching; // 这里为 true , 则不会安装 datapath flow
 
     /* Recirc action IDs on which references are held. */
+    // 有些翻译需要多次翻译, 这里将 fronze ctx 的索引 id 返回去
     struct recirc_refs recircs;
 };
 
 // ref: xlate_in_init() / xlate_actions()
+// 翻译的输入:
+// - 普通成员是纯输入
+// - 指针成员有的是 caller 提供的 buffer, 让翻译后的结果放到那里
 struct xlate_in {
     struct ofproto_dpif *ofproto;		// flow 的 in_port 所在的 switch, ref upcall_receive() upcall_xlate()->xlate_in_init()
-    ovs_version_t        tables_version;   /* Lookup in this version. */ // ofproto 对饮的 version
+    ovs_version_t        tables_version;   /* Lookup in this version. */ // ofproto 对应的 version
 
     /* Flow to which the OpenFlow actions apply.  xlate_actions() will modify
      * this flow when actions change header fields. */
-    // 如果 openflow 需要 change hdr 的话, 将 flow 修改后, 再次递归翻译 ???
-    struct flow flow; // upcall 的时候从 pkt 里提取的 flow, 就是要用这个 flow 去匹配一条 openflow
+    // 用来匹配 OpenFlow action 的 flow (key), 来源
+    // 1. upcall 时 从 pkt 里提取的
+    // 2. 前述 action 可能修改
+    struct flow flow;
 
     /* Pointer to the original flow received during the upcall. xlate_actions()
      * will never modify this flow. */
+    // 一个只读指针, 不修改的, 前面的 flow 是随着 action 可能被修改的
+    // 这里的 flow 是用来为后续原始报文匹配生成匹配条件的
     const struct flow *upcall_flow;	// 这个指针在初始化之后就不修改了 ??? ref: xlate_in_init()
 
     /* The packet corresponding to 'flow', or a null pointer if we are
      * revalidating without a packet to refer to. */
+    // 只读指针, 可以是 NULL, 如果是 revalidator 线程用来检查 datapath 是否有效
     const struct dp_packet *packet;
 
     /* Should OFPP_NORMAL update the MAC learning table?  Should "learn"
@@ -93,9 +108,18 @@ struct xlate_in {
 
     /* The rule initiating translation or NULL. If both 'rule' and 'ofpacts'
      * are NULL, xlate_actions() will do the initial rule lookup itself. */
-    struct rule_dpif *rule;	// 对应的 openflow ?? 如果是处理 packet-out 消息的时候希望得到翻译, 那么 rule(i.e. openflow) 就直接提供了. 这里的 rule 就是等待翻译的 openflow, 如果是 upcall 路径上来的时候, 会先用 前面的 datapath 的 flow 查找 openflow (i.e. rule) 然后再做翻译
+    // caller 指定的本次翻译起点的 OpenFlow, 可以是 NULL
+    //
+    // 一轮翻译可以经过多次 OpenFlo 的, 当前正在匹配的 flow 是在 xlate_ctx 里的
+    //
+    // 如果是处理 packet-out 消息的时候希望得到翻译, 那么 rule(i.e. openflow)
+    // 就直接提供了. 这里的 rule 就是等待翻译的 openflow, 如果是 upcall
+    // 路径上来的时候, 会先用 前面的 datapath 的 flow 查找 openflow (i.e. rule)
+    // 然后再做翻译
+    struct rule_dpif *rule;	
 
     /* The actions to translate.  If 'rule' is not NULL, these may be NULL. */
+    // 只读指针, 等待翻译的 openflow action
     const struct ofpact *ofpacts; // openflow actions
     size_t ofpacts_len;
 
@@ -131,8 +155,8 @@ struct xlate_in {
      * These fields are really implementation details; the client doesn't care
      * about what they mean.  See the corresponding fields in xlate_ctx for
      * real documentation. */
-    int depth;
-    int resubmits;
+    int depth; // 当前嵌套递归深度, xlate_recursively, 不过这里对于从大号的 table 向小号 table 的 goto 不计数
+    int resubmits; // 这里是通通计数的
 
     /* If nonnull, flow translation populates this cache with references to all
      * modules that are affected by translation. This 'xlate_cache' may be
@@ -145,6 +169,7 @@ struct xlate_in {
 
     /* If nonnull, flow translation puts the resulting datapath actions in this
      * buffer.  If null, flow translation will not produce datapath actions. */
+    // 翻译后的 datapath action
     struct ofpbuf *odp_actions; // 翻译后的信息会放到这里的
 
     /* If nonnull, flow translation populates this with wildcards relevant in
@@ -154,9 +179,11 @@ struct xlate_in {
      * packets, 'wc' would have the 'in_port' (always set), 'dl_type' (flow
      * match), 'vlan_tci' (normal action), and 'dl_dst' (normal action) fields
      * set. */
+    // 翻译后的 wildcard 匹配条件
     struct flow_wildcards *wc; // 翻译后的 wildcard 放到这里
 
     /* The frozen state to be resumed, as returned by xlate_lookup(). */
+    // 这一次翻译来自上一次某个被冻结的翻译的后续
     const struct frozen_state *frozen_state;
 
     /* If true, the packet to be translated is from a packet_out msg. */
@@ -164,11 +191,82 @@ struct xlate_in {
 
     /* ofproto/trace maintains this queue to trace flows that require
      * recirculation. */
-    struct ovs_list *recirc_queue;
+    struct ovs_list *recirc_queue; // 支持 ofproto/trace 命令的
 
     /* UUID of first non-patch port packet was received on.*/
+    // 索引 xport 的, recirc 后重新定位入口端口和其 bridge
     struct uuid xport_uuid;
 };
+
+/* ==============
+ * 拓扑视图更新事务
+ * ==============
+ * void xlate_txn_start(void); 建立配置
+ * void xlate_txn_commit(void);  RCU 发布
+ *
+ * 典型调用方式:
+ * xlate_txn_start();
+ *
+ * xlate_ofproto_set(...);
+ * xlate_bundle_set(...);
+ * xlate_ofport_set(...);
+ *
+ * xlate_txn_commit();
+ *
+ *
+ * ==============
+ * 拓扑构建
+ * ==============
+ * xlate_ofproto_set()       xbridge     创建或更新 bridge 的翻译视图
+ * xlate_remove_ofproto()    xbridge     删除 bridge 视图及其关联的 bundle、port 视图
+ * xlate_bundle_set()        xbundle     创建或更新逻辑端口的 VLAN、bond 等配置
+ * xlate_bundle_remove()     xbundle     删除 bundle 视图
+ * xlate_ofport_set()        xport       创建或更新具体端口、端口号映射及协议状态
+ * xlate_ofport_remove()     xport       删除端口视图
+ * xlate_set_support()       datapath   更新当前 datapath 的能力
+ *
+ *
+ * ==============
+ * pkt 查找: 确定报文属于哪个 bridge, 哪个 port
+ * ==============
+ * xlate_lookup_ofproto()
+ * xlate_lookup()
+ *
+ *
+ * ==============
+ * 翻译接口
+ * ==============
+ * - xlate_in_init: 初始化一次翻译请求
+ * - xlate_actions: 翻译主流程
+ * - xlate_out_unint: 释放翻译返回的一些辅助结果的资源
+ *
+ *
+ * 典型调用方式
+ * struct xlate_in xin;
+ * struct xlate_out xout;
+ *                                                      
+ * xlate_in_init(&xin, ...);
+ * enum xlate_error error = xlate_actions(&xin, &xout);
+ *                                                      
+ * 检查 error，使用 actions、wc、xout 等结果。
+ *                                                      
+ * xlate_out_uninit(&xout);
+ *
+ *
+ * ==============
+ * 特殊报文处理
+ * ==============
+ * xlate_resume: 处理 controller 的 resume 请求. 普通报文的恢复冻结不走这里
+ * xlate_send_packet(): 将报文从一个制定端口发送出去. 这里真的会发送, 而不仅仅是翻译
+ *
+ *
+ * ==============
+ * MAC 学习: 支持 NORMAL action
+ * ==============
+ *  xlate_mac_learning_update()        根据入端口、源 MAC、VLAN 等更新动态 MAC 学习状态
+ *  xlate_add_static_mac_entry()       添加 MAC + VLAN 到指定端口所属 bundle 的静态映射
+ *  xlate_delete_static_mac_entry()    删除指定 MAC + VLAN 的静态映射
+ */
 
 void xlate_ofproto_set(struct ofproto_dpif *, const char *name, struct dpif *,
                        const struct mac_learning *, struct stp *,

@@ -36,6 +36,10 @@ struct ofpbuf;
 struct simap;
 struct pkt_metadata;
 
+// 几种 原因
+// 1. 需要特定协议支持
+// 2. datapath 无法处理的 action
+// 3. datapath 无法匹配
 #define SLOW_PATH_REASONS                                               \
     SPR(SLOW_CFM,        "cfm",        "Consists of CFM packets")       \
     SPR(SLOW_BFD,        "bfd",        "Consists of BFD packets")       \

@@ -414,6 +414,10 @@ mirror_update_stats(struct mbridge *mbridge, mirror_mask_t mirrors,
  * receives the output VLAN (if any).
  *
  * Everything returned here is assumed to be RCU protected.
+ *
+ * out: mirror 的目的 port. 可以镜像到原始 port 的
+ * snaplen: mirror 的 max 报文长度
+ * out_vlan: mirror 也可以选择指定 vlan, 而不是某个 port. 报文是不能镜像到原始 vlan 的
  */
 bool
 mirror_get(struct mbridge *mbridge, int index, const unsigned long **vlans,

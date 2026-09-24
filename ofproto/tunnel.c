@@ -304,6 +304,7 @@ tnl_port_del(const struct ofport_dpif *ofport, odp_port_t odp_port)
  *
  * Callers should verify that 'flow' needs to be received by calling
  * tnl_port_should_receive() before this function. */
+//  /* 根据 flow 里的 隧道信息 进一步查找 datapath 逻辑 port */
 const struct ofport_dpif *
 tnl_port_receive(const struct flow *flow) OVS_EXCLUDED(rwlock)
 {

@@ -12,6 +12,128 @@
  * See the License for the specific language governing permissions and
  * limitations under the License. */
 
+
+/* ==============================
+ * API
+ * ==============================
+ * --------------
+ * 拓扑视图更新事务
+ * --------------
+ * void xlate_txn_start(void); 建立配置
+ * void xlate_txn_commit(void);  RCU 发布
+ *
+ * 典型调用方式:
+ * xlate_txn_start();
+ *
+ * xlate_ofproto_set(...);
+ * xlate_bundle_set(...);
+ * xlate_ofport_set(...);
+ *
+ * xlate_txn_commit();
+ *
+ *
+ * --------------
+ * 拓扑构建
+ * --------------
+ * xlate_ofproto_set()       xbridge     创建或更新 bridge 的翻译视图
+ * xlate_remove_ofproto()    xbridge     删除 bridge 视图及其关联的 bundle、port 视图
+ * xlate_bundle_set()        xbundle     创建或更新逻辑端口的 VLAN、bond 等配置
+ * xlate_bundle_remove()     xbundle     删除 bundle 视图
+ * xlate_ofport_set()        xport       创建或更新具体端口、端口号映射及协议状态
+ * xlate_ofport_remove()     xport       删除端口视图
+ * xlate_set_support()       datapath   更新当前 datapath 的能力
+ *
+ *
+ * --------------
+ * pkt 查找: 确定报文属于哪个 bridge, 哪个 port
+ * --------------
+ * xlate_lookup_ofproto()
+ * xlate_lookup()
+ *
+ *
+ * --------------
+ * 翻译接口
+ * --------------
+ * - xlate_in_init: 初始化一次翻译请求
+ * - xlate_actions: 翻译主流程
+ * - xlate_out_unint: 释放翻译返回的一些辅助结果的资源
+ *
+ *
+ * 典型调用方式
+ * struct xlate_in xin;
+ * struct xlate_out xout;
+ *                                                      
+ * xlate_in_init(&xin, ...);
+ * enum xlate_error error - xlate_actions(&xin, &xout);
+ *                                                      
+ * 检查 error，使用 actions、wc、xout 等结果。
+ *                                                      
+ * xlate_out_uninit(&xout);
+ *
+ *
+ * --------------
+ * 特殊报文处理
+ * --------------
+ * xlate_resume: 处理 controller 的 resume 请求. 普通报文的恢复冻结不走这里
+ * xlate_send_packet(): 将报文从一个制定端口发送出去. 这里真的会发送, 而不仅仅是翻译
+ *
+ *
+ * --------------
+ * MAC 学习: 支持 NORMAL action
+ * --------------
+ *  xlate_mac_learning_update()        根据入端口、源 MAC、VLAN 等更新动态 MAC 学习状态
+ *  xlate_add_static_mac_entry()       添加 MAC + VLAN 到指定端口所属 bundle 的静态映射
+ *  xlate_delete_static_mac_entry()    删除指定 MAC + VLAN 的静态映射
+ *
+ *
+ *
+ * ==============================
+ * Core Data Structures
+ * ==============================
+ * --------------
+ * 网络拓扑视图
+ * --------------
+ * xlate_cfg
+ * 创建: xlate_txn_start(), 任何配置变化的时候都创建新的, 当然要从老的里面先复制过来, 然后 RCU 更新
+ * 使用: new_cfg 上修改, 然后 RCU 更新到 xcfgp 供翻译线程使用
+ * 销毁: xlate_xcfg_free() 下一次配置提交的时候, RCU 同步后, 删除
+ *
+ *
+ * xbridge
+ * 创建:
+ *  - 新 bridege 首次同步翻译配置: xlate_ofproto_set() 查找失败后分配
+ *  - 更新配置: xlate_xbridge_copy() 分配新对象
+ * 销毁:
+ *  - bridge 被删除: xlate_ofproto_remove() 
+ *  - 回收旧配置: xlate_xcfg_free()
+ *
+ *
+ * xbundle: xport 上做封装, 可以表达 bonding 这种更复杂的 port
+ * 创建:
+ *  - 创建新逻辑 port: xlate_bundle_set()
+ *  - 更新配置: xlate_xbundle_copy() 分配新对象
+ *
+ *
+ *
+ * xport:
+ * 创建:
+ *  - 创建新逻辑 port: xlate_ofport_set()
+ *  - 更新配置: xlate_xport_copy() 分配新对象
+ *
+ *
+ *
+ * --------------
+ * 翻译相关
+ * --------------
+ * struct xlate_in
+ * struct xlate_out
+ * struct xlate_ctx
+ *
+ *
+ * static OVSRCU_TYPE(struct xlate_cfg *) xcfgp = OVSRCU_INITIALIZER(NULL);
+ *
+ * */
+
 #include <config.h>
 
 #include "ofproto/ofproto-dpif-xlate.h"
@@ -102,48 +224,57 @@ struct xbridge_addr {
 };
 
 // 表示一个 bridge
+// 1. 对应的 openflow bridge 
+// 2. 关联的 bundle 和 port
+// 3. 实现各种子功能
+//
+// xbridge 生命周期
 struct xbridge {
-    struct hmap_node hmap_node;   /* Node in global 'xbridges' map. */
-    struct ofproto_dpif *ofproto; /* Key in global 'xbridges' map. */
+    struct hmap_node hmap_node;   /* Node in global 'xbridges' map. xlate_cfg.xbridges */
+    struct ofproto_dpif *ofproto; /* Key in global 'xbridges' map. 这是在 map 里查找 xbridge 的 key, 这个结构表示一个 openflow switch, 其中存了 flow table, group table 等信息 */
 
-    struct ovs_list xbundles;     /* Owned xbundles. */
-    struct hmap xports;           /* Indexed by ofp_port. */
+    struct ovs_list xbundles;     /* Owned xbundles. 这个 bridge 中的逻辑端口, 一般对应 ovsdb 中的一个 port. vlan/bond/lacp 等信息在这里 */
+    struct hmap xports;           /* Indexed by ofp_port. 特别注意: 这里的 index 是 openflow 的 ofp_port */
 
-    char *name;                   /* Name used in log messages. */
-    struct dpif *dpif;            /* Datapath interface. */
-    struct mac_learning *ml;      /* Mac learning handle. */
-    struct mcast_snooping *ms;    /* Multicast Snooping handle. */
-    struct mbridge *mbridge;      /* Mirroring. */
-    struct dpif_sflow *sflow;     /* SFlow handle, or null. */
-    struct dpif_ipfix *ipfix;     /* Ipfix handle, or null. */
-    struct netflow *netflow;      /* Netflow handle, or null. */
-    struct stp *stp;              /* STP or null if disabled. */
-    struct rstp *rstp;            /* RSTP or null if disabled. */
+    //
+    // 各种功能的支持
+    char *name;                   /* Name used in log messages. brideg name */
+    struct dpif *dpif;            /* Datapath interface. 底层 datapath 的实现 */
+    struct mac_learning *ml;      /* Mac learning handle. 处理 mac learning. 主要是维护 mac 地址和 逻辑 port 的关系*/
+    struct mcast_snooping *ms;    /* Multicast Snooping handle. 处理组播 */
+    struct mbridge *mbridge;      /* Mirroring. 支持 mirror 功能 */
+    struct dpif_sflow *sflow;     /* SFlow handle, or null. 支持 sFLOW 功能*/
+    struct dpif_ipfix *ipfix;     /* Ipfix handle, or null. 支持 ipfix 功能 */
+    struct netflow *netflow;      /* Netflow handle, or null. 支持 netflow 功能*/
+    struct stp *stp;              /* STP or null if disabled. 支持 stp*/
+    struct rstp *rstp;            /* RSTP or null if disabled. 支持 rstp */
 
     bool has_in_band;             /* Bridge has in band control? */
     bool forward_bpdu;            /* Bridge forwards STP BPDUs? */
 
     /* Datapath feature support. */
+    // 底层 datapath 的 feature
     struct dpif_backer_support support;
 
+    // bridege local port 的地址即
     struct xbridge_addr *addr;
 };
 
 // 表示一个 port, 因为 有 bonding 这种 port, 其可能对应多个 interface, 所以搞了一个 bundle 来表示 port
 struct xbundle {
-    struct hmap_node hmap_node;    /* In global 'xbundles' map. */
-    struct ofbundle *ofbundle;     /* Key in global 'xbundles' map. */
+    struct hmap_node hmap_node;    /* In global 'xbundles' map. xlate_cfg.xbundles */
+    struct ofbundle *ofbundle;     /* Key in global 'xbundles' map. 关联的 openflow bundle 结构 */
 
-    struct ovs_list list_node;     /* In parent 'xbridges' list. */
+    struct ovs_list list_node;     /* In parent 'xbridges' list. xbridges.xbundles */
     struct xbridge *xbridge;       /* Parent xbridge. */
 
-    struct ovs_list xports;        /* Contains "struct xport"s. */
+    struct ovs_list xports;        /* Contains "struct xport"s. 子 xports, 考虑 bonding 口 */
 
     char *name;                    /* Name used in log messages. */
-    struct bond *bond;             /* Nonnull iff more than one port. */
-    struct lacp *lacp;             /* LACP handle or null. */
+    struct bond *bond;             /* Nonnull iff more than one port. 支持 bond 实现 */
+    struct lacp *lacp;             /* LACP handle or null. 支持 lacp 实现 */
 
-    enum port_vlan_mode vlan_mode; /* VLAN mode. */
+    enum port_vlan_mode vlan_mode; /* VLAN mode.  vlan 信息 */
     uint16_t qinq_ethtype;         /* Ethertype of dot1q-tunnel interface
                                     * either 0x8100 or 0x88a8. */
     int vlan;                      /* -1=trunk port, else a 12-bit VLAN ID. */
@@ -151,29 +282,29 @@ struct xbundle {
                                     * NULL if all VLANs are trunked. */
     unsigned long *cvlans;         /* Bitmap of allowed customer vlans,
                                     * NULL if all VLANs are allowed */
-    enum port_priority_tags_mode use_priority_tags;
+    enum port_priority_tags_mode use_priority_tags; // vlan pcp
                                    /* Use 802.1p tag for frames in VLAN 0? */
-    bool floodable;                /* No port has OFPUTIL_PC_NO_FLOOD set? */
-    bool protected;                /* Protected port mode */
+    bool floodable;                /* No port has OFPUTIL_PC_NO_FLOOD set?  这个 port 可否作为 NORMAL FLooad 的 output 目标*/
+    bool protected;                /* Protected port mode . 如果输入和输出口都都有 protected, 那么对应的转发路径会被阻止. ref: xlate_flow_is_protected() */
 };
 
 // tarnslate 层使用的结构, 表示一个 port
 struct xport {
-    struct hmap_node hmap_node;      /* Node in global 'xports' map. */
-    struct ofport_dpif *ofport;      /* Key in global 'xports map. */
+    struct hmap_node hmap_node;      /* Node in global 'xports' map. 挂到 xlate_cfg.xports */
+    struct ofport_dpif *ofport;      /* Key in global 'xports map.  在 xlate_cfg.xports 中查找的 key, 也对应到其 openflow port */
 
-    struct hmap_node ofp_node;       /* Node in parent xbridge 'xports' map. */
-    ofp_port_t ofp_port;             /* Key in parent xbridge 'xports' map. */
+    struct hmap_node ofp_node;       /* Node in parent xbridge 'xports' map. 挂到 xbridge.xports */
+    ofp_port_t ofp_port;             /* Key in parent xbridge 'xports' map. 其中的查找 key. openflow port id */
 
-    struct hmap_node uuid_node;      /* Node in global 'xports_uuid' map. */
-    struct uuid uuid;                /* Key in global 'xports_uuid' map. */
+    struct hmap_node uuid_node;      /* Node in global 'xports_uuid' map. 挂到 xlate_cfg.uud_node */
+    struct uuid uuid;                /* Key in global 'xports_uuid' map. key: uuid */
 
-    odp_port_t odp_port;             /* Datapath port number or ODPP_NONE. */
+    odp_port_t odp_port;             /* Datapath port number or ODPP_NONE. 数据面的 port id */
 
-    struct ovs_list bundle_node;     /* In parent xbundle (if it exists). */
-    struct xbundle *xbundle;         /* Parent xbundle or null. */
+    struct ovs_list bundle_node;     /* In parent xbundle (if it exists). 挂到 xbundle.xports */
+    struct xbundle *xbundle;         /* Parent xbundle or null. 是否属于某个 xbundle 口 */
 
-    struct netdev *netdev;           /* 'ofport''s netdev. */
+    struct netdev *netdev;           /* 'ofport''s netdev. 底层的 netdev 设备 */
 
     struct xbridge *xbridge;         /* Parent bridge. */
     struct xport *peer;              /* Patch port peer or null. */
@@ -183,30 +314,60 @@ struct xport {
     int stp_port_no;                 /* STP port number or -1 if not in use. */
     struct rstp_port *rstp_port;     /* RSTP port or null. */
 
-    struct hmap skb_priorities;      /* Map of 'skb_priority_to_dscp's. */
+    struct hmap skb_priorities;      /* Map of 'skb_priority_to_dscp's. skb_priorigy -> dscp 的映射表. 输出 ip 报文的时候可以根据 flow->skb_priroity 来 rewrite IP 头的 DSCP  */
 
     bool may_enable;                 /* May be enabled in bonds. */
     bool is_tunnel;                  /* Is a tunnel port. */
-    enum netdev_pt_mode pt_mode;     /* packet_type handling. */
+    enum netdev_pt_mode pt_mode;     /* packet_type handling. 如何处理报文 */
 
-    struct cfm *cfm;                 /* CFM handle or null. */
-    struct bfd *bfd;                 /* BFD handle or null. */
-    struct lldp *lldp;               /* LLDP handle or null. */
+    struct cfm *cfm;                 /* CFM handle or null. connectivity fault management */
+    struct bfd *bfd;                 /* BFD handle or null. bfd */
+    struct lldp *lldp;               /* LLDP handle or null. lldp */
 };
 
-// 翻译过程的 ctx
+// 翻译过程的 ctx, 翻译后得到两个东西: wildcard 是匹配条件 + 数据面 action
 // 什么时候需要翻译呢?
 // - datapath 的 upcall: 输入: datapath flow
 // - controller 的 packet out msg: 输入: openflow
+//
+// 生命周期: 在一次 xlate_actions 中创建, 清理. 冻结也不会延长这个结构的
+// lifecycle 的. 而是将冻结的信息保存到别的地方, 后续恢复的时候重新创建新的 xlate_ctx.
+//
+// 翻译不仅仅发生在真实报文导致的 upcall, revalidator 在 xin->packet == NULL 的情况下也会触发翻译. 来检查 datapath 的 flow 是否有效.
+//
+// *输入输出*
+// - xin
+// - xout
+//
+// 关联配置
+// - xcfg
+// - xbridge
+//
+// 报文状态
+// - base_flow
+// - orig_tunnel_ipv6_dst
+//
+// action 相关
+// - odp_actions: 已经生成的datapath action, 后续交给 datapath 执行
+// - frozen_actions: 冻结的尚未完成翻译的 OpenFlow aciton,
+// 后续恢复的时候继续翻译
+// - action_set: openflow pipeline 积累的 action set
+//
+//
 struct xlate_ctx {
     struct xlate_in *xin;
     struct xlate_out *xout;
 
-    struct xlate_cfg *xcfg;
-    const struct xbridge *xbridge;
+    struct xlate_cfg *xcfg; // xcfg 不就是当前的 gloabl 的 xlate_cfg 么?
+    const struct xbridge *xbridge; // 关联的 xbridge, 这个可以变化的.  比如通过 patch 口进入另一个 bridge 
 
-    /* Flow at the last commit. */
-    struct flow base_flow; // ref: xlate_commit_actions() xin.flow 会在 action 翻译过程中被修改, 然后在 xlate_commit_actions() 中比较 flow 和这里的 base_flow 就知道 pkt 里的哪些 field 需要被修改, 这样就可以通过 xlate_commit_actions() 将其转换为 datapath 的 action 了
+    /* Flow at the last commit.  */
+    // 上一次 commit 后的 报文 状态, 即已经生成的 datapath 动作对应的报文状态, xin->flow 是翻译到当前 action 时, 逻辑上的报文状态
+    // ref: xlate_commit_actions() xin.flow 会在 action 翻译过程中被修改, 然后在
+    // xlate_commit_actions() 中比较 flow 和这里的 base_flow 就知道 pkt 里的哪些
+    // field 需要被修改, 这样就可以通过 xlate_commit_actions() 将其转换为
+    // datapath 的 action 了
+    struct flow base_flow; 
 
     /* Tunnel IP destination address as received.  This is stored separately
      * as the base_flow.tunnel is cleared on init to reflect the datapath
@@ -214,26 +375,35 @@ struct xlate_ctx {
      * which might lead to an infinite loop.  This could happen easily
      * if a tunnel is marked as 'ip_remote=flow', and the flow does not
      * actually set the tun_dst field. */
+    // 收到 tunnle 报文时的 dst ip, 防止隧道输出指向自身形成循环. 单独保存是因为初始化的时候 base_flow.tunnel 会被清空
     struct in6_addr orig_tunnel_ipv6_dst;
 
     /* Stack for the push and pop actions.  See comment above nx_stack_push()
      * in nx-match.c for info on how the stack is stored. */
+    // 保存 action 的 stack, 翻译被冻结的时候, 这个要保存
     struct ofpbuf stack; // 支持 push / pop stack actions
 
     /* The rule that we are currently translating, or NULL. */
-    struct rule_dpif *rule; // ref: xlate_actions(), 需要翻译的 openflow
+    // ref: xlate_actions(), 需要翻译的 openflow
+    // 碰到 resubmit 等 action 的时候, 这个可以变化的. 另外也可以是 NULL, 比如翻译 caller 直接提供的 action list
+    struct rule_dpif *rule;
+
+    // 翻译后得到两个东西: 数据面匹配条件 wc,  和 数据面 action odp_actions
+
 
     /* Flow translation populates this with wildcards relevant in translation.
      * When 'xin->wc' is nonnull, this is the same pointer.  When 'xin->wc' is
      * null, this is a pointer to a temporary buffer. */
-    struct flow_wildcards *wc; // 翻译后的结果放到这里, 数据面 flow 的 wildcard, 用来构建 megaflow
+    // 翻译后的结果放到这里, 数据面 flow 的 wildcard, 用来构建 megaflow
+    struct flow_wildcards *wc;
 
     /* Output buffer for datapath actions.  When 'xin->odp_actions' is nonnull,
      * this is the same pointer.  When 'xin->odp_actions' is null, this points
      * to a scratch ofpbuf.  This allows code to add actions to
      * 'ctx->odp_actions' without worrying about whether the caller really
      * wants actions. */
-    struct ofpbuf *odp_actions; // 翻译后的结果放到这里, 最重要的 数据面的 action 咯. ovs datapath actions
+    // 已经生成的 action 保存到这里 最重要的 数据面的 action 咯. ovs datapath actions
+    struct ofpbuf *odp_actions;
 
     /* Statistics maintained by xlate_table_action().
      *
@@ -257,25 +427,42 @@ struct xlate_ctx {
      */
     int depth;                  /* Current resubmit nesting depth. */
     int resubmits;              /* Total number of resubmits. */
-    bool in_action_set;         /* Currently translating action_set, if true. */ // 默认情况下 ovs 的 instruction 是 apply_actions, 所以大部分时候都是翻译 action list, 注意 action list 的执行是可以重复且按照 flow 的顺序的. 但是 action set 的执行是必须按照预定的顺序的, 且只支持某些 action.
+    // 默认情况下 ovs 的 instruction 是 apply_actions, 所以大部分时候都是翻译
+    // action list, 注意 action list 的执行是可以重复且按照 flow 的顺序的. 但是
+    // action set 的执行是必须按照预定的顺序的, 且只支持某些 action.
+    bool in_action_set;         /* Currently translating action_set, if true. */
+    // 这一次翻译来自 packet out 消息
     bool in_packet_out;         /* Currently translating a packet_out msg, if
                                  * true. */
+    // 存在还没有 commit 的 encap 操作
     bool pending_encap;         /* True when waiting to commit a pending
                                  * encap action. */
+    // 存在还没有 commit 的 decap 操作
     bool pending_decap;         /* True when waiting to commit a pending
                                  * decap action. */
+    // encap 操作需要的额外信息
     struct ofpbuf *encap_data;  /* May contain a pointer to an ofpbuf with
                                  * context for the datapath encap action.*/
 
+    // 当前在处理的 openflow 的 table id
     uint8_t table_id;           /* OpenFlow table ID where flow was found. */
     ovs_be64 rule_cookie;       /* Cookie of the rule being translated. */
+    // pkt 进入时的 priority, 处理 pop_queue 的时候可以恢复此前的 priority, 注意是 skb 的优先级, 不是 openflow 的
     uint32_t orig_skb_priority; /* Priority when packet arrived. */
+    // 各种统计
     uint32_t sflow_n_outputs;   /* Number of output ports. */
     odp_port_t sflow_odp_port;  /* Output port for composing sFlow action. */
     ofp_port_t nf_output_iface; /* Output interface index for NetFlow. */
-    bool exit;                  /* No further actions should be processed. */ // 通知后续流程不要翻译了, 退出吧. 比如: 当前 freeze 了
+
+    // 通知后续流程不要翻译了, 退出吧. 比如: 当前 freeze 了
+    bool exit;                  /* No further actions should be processed. */
+    // ref: mirror_packet() 表示已经 mirror 过了
     mirror_mask_t mirrors;      /* Bitmap of associated mirrors. */
     int mirror_snaplen;         /* Max size of a mirror packet in byte. */
+
+
+
+    // 用于保存进度的
 
    /* Freezing Translation			__重要__
     * ====================
@@ -385,27 +572,47 @@ struct xlate_ctx {
     * ofpacts that can be translated directly, so it is not much of a special
     * case at that point.
     */
+    // 当前正在冻结翻译, exit path 需要收集剩余的 action, 保存后续执行需要的状态
     bool freezing;
+    // 表示生成 recirculation 的时候, 先生成 datapath  HASH action, 后续阶段要使用 dp_hash
     bool recirc_update_dp_hash;    /* Generated recirculation will be preceded
                                     * by datapath HASH action to get an updated
                                     * dp_hash after recirculation. */
+    // datapath HASH action 需要的 算法和 basis 参数
     uint32_t dp_hash_alg;
     uint32_t dp_hash_basis;
-    struct ofpbuf frozen_actions; // 保存那些在 freeze 的时候还完全没有处理的 openflow action, ref: freeze_unroll_actions()
-    const struct ofpact_controller *pause;
+    // 保存那些在 freeze 的时候还完全没有处理的 openflow action, ref: freeze_unroll_actions()
+    // 不仅包含当前规则的剩余动作，还可能包含各层 resubmit 返回后应继续执行的动作。例如：
+    //
+    // table 0: resubmit(1), output:2
+    // table 1: 某动作触发冻结, output:3
+    //
+    //  恢复时既要执行 table 1 剩下的 output:3，也要保留返回 table 0 后的 output:2。
+    //
+    // 缓冲区还会加入内部 OFPACT_UNROLL_XLATE 动作，用于恢复对应层次的 table ID 和 cookie。
+    struct ofpbuf frozen_actions;
+    // 到 pause 的 controller. 如果是 recirculation 导致的, 不需要这个 action
+    const struct ofpact_controller *pause; 
 
     /* True if a packet was but is no longer MPLS (due to an MPLS pop action).
      * This is a trigger for recirculation in cases where translating an action
      * or looking up a flow requires access to the fields of the packet after
      * the MPLS label stack that was originally present. */
-    bool was_mpls;	// 曾经是 mpls ref: compose_mpls_pop_action()
+    // 曾经是 mpls, 但是 pop 后不是了 ref: compose_mpls_pop_action()
+    bool was_mpls;
 
     /* True if conntrack has been performed on this packet during processing
      * on the current bridge. This is used to determine whether conntrack
      * state from the datapath should be honored after thawing. */
+    // 决定冻结后恢复的时候是否认可 datapath 提供方的 conntrack 状态
     bool conntracked;
 
     /* Pointer to an embedded NAT action in a conntrack action, or NULL. */
+    // 临时指向 ct(...)  action 内部的 nat action, 如下使用
+    // 1. 处理 ct 的嵌套 action
+    // 2. 遇到 nat, 记录到 ct_nat_action
+    // 3. 构造 datapath CT actioon, 填入 NAT 参数
+    // 4. 清空 ct_nat_action
     struct ofpact_nat *ct_nat_action;	// 保存 nat 相关参数
 
     /* OpenFlow 1.1+ action set.
@@ -414,9 +621,13 @@ struct xlate_ctx {
      * When translation is otherwise complete, ofpacts_execute_action_set()
      * converts it to a set of "struct ofpact"s that can be translated into
      * datapath actions. */
+    // action set 中是否有 group action
     bool action_set_has_group;  /* Action set contains OFPACT_GROUP? */
+    // 支持 action set 的. 最后在 ofpacts_exectue_action_set() 中转换成 datapath action
     struct ofpbuf action_set;   /* Action set. */	// 实现 action set
 
+    // 本次翻译的错误状态
+    // 结束的时候如果是错误的, 那么会清空 caller 提供的 odp_actions, 避免 datapath 执行翻译了一部分的动作.
     enum xlate_error error;     /* Translation failed. */
 };
 
@@ -427,6 +638,7 @@ struct xvlan_single {
     uint16_t pcp;
 };
 
+// qinq 场景可以有 2 vlan header
 struct xvlan {
     struct xvlan_single v[FLOW_MAX_VLAN_HEADERS];
 };
@@ -522,6 +734,7 @@ static struct xbundle ofpp_none_bundle = {
 /* Node in 'xport''s 'skb_priorities' map.  Used to maintain a map from
  * 'priority' (the datapath's term for QoS queue) to the dscp bits which all
  * traffic egressing the 'ofport' with that priority should be marked with. */
+// skb_priority 对应的 dscp 位,  挂到 xport上构成 一个 mapping
 struct skb_priority_to_dscp {
     struct hmap_node hmap_node; /* Node in 'ofport_dpif''s 'skb_priorities'. */
     uint32_t skb_priority;      /* Priority of this queue (see struct flow). */
@@ -534,12 +747,14 @@ struct skb_priority_to_dscp {
  * When the main thread needs to change the configuration, it copies xcfgp to
  * new_xcfg and edits new_xcfg. This enables the use of RCU locking which
  * does not block handler and revalidator threads. */
+// 网络拓扑的视图
 struct xlate_cfg {
-    struct hmap xbridges;
-    struct hmap xbundles;
-    struct hmap xports;
-    struct hmap xports_uuid;
+    struct hmap xbridges; // 所有 xbridge, key: struct ofproto_dpif * 指针
+    struct hmap xbundles; // 所有 xbundle, key: struct ofbundle * 指针
+    struct hmap xports; // 所有 xport, key: struct ofport_dpif * 指针
+    struct hmap xports_uuid; // 所有 xport, key: uuid
 };
+// 这是一个全局的结构, 表示全局的网络拓扑视图
 static OVSRCU_TYPE(struct xlate_cfg *) xcfgp = OVSRCU_INITIALIZER(NULL);
 static struct xlate_cfg *new_xcfg = NULL;
 
@@ -578,7 +793,21 @@ static void output_normal(struct xlate_ctx *, const struct xbundle *,
 /* Optional bond recirculation parameter to compose_output_action(). */
 // 有些 bond 口的 output 是基于 recirc 实现的
 // 先 翻译 output 前的 action, 等到 output 的时候, 再上来计算 hash 进而选择 output port
+//
+// 这里的 recirc_id 不是 openflow 的 table id
+//
+// 拆分为两阶段的好处:
+// - 比如第一阶段是匹配 mac 的, 我们不需要非要提取报文的 5-tuple 来做 hash 值, 然后下发一个精确匹配的 flow 下去
+// - 而是用第二级来实现 hash.
+//
 struct xlate_bond_recirc {
+    // 非 0 表示 bond 使用 recirculation 来实现 output, 即 action 要生成
+    // hash(算法, basis), recirc(recirc_id)
+    //
+    // 一个 output(bond) action 被翻译为了两条 flow
+    // - 第一次匹配原始报文, 生成: action = hash + recirc(R)
+    // - 第二次又miss后 upcall, 然后匹配bond 的内部规则, 生成: action = output(bond member)
+    //
     uint32_t recirc_id;  /* !0 Use recirculation instead of output. */ // ref: output_normal()
     uint8_t  hash_alg;   /* !0 Compute hash for recirc before. */
     uint32_t hash_basis;  /* Compute hash for recirc before. */
@@ -652,6 +881,7 @@ static void xlate_xcfg_free(struct xlate_cfg *);
  * more trace nodes within the new node.
  *
  * If tracing is not enabled, does nothing and returns NULL. */
+// for tracing
 static struct ovs_list * OVS_PRINTF_FORMAT(3, 4)
 xlate_report(const struct xlate_ctx *ctx, enum oftrace_node_type type,
              const char *format, ...)
@@ -756,6 +986,7 @@ xlate_report_debug(const struct xlate_ctx *ctx, enum oftrace_node_type type,
  * 'ofpacts_len' OpenFlow actions in 'ofpacts'.
  *
  * If tracing is not enabled, does nothing. */
+// for tracing 
 static void
 xlate_report_actions(const struct xlate_ctx *ctx, enum oftrace_node_type type,
                      const char *title,
@@ -777,6 +1008,7 @@ xlate_report_actions(const struct xlate_ctx *ctx, enum oftrace_node_type type,
  * is the new action set or the old one.
  *
  * If tracing is not enabled, does nothing. */
+// for tracing 
 static void
 xlate_report_action_set(const struct xlate_ctx *ctx, const char *verb)
 {
@@ -806,6 +1038,7 @@ xlate_report_action_set(const struct xlate_ctx *ctx, const char *verb)
  * restore its previous value.
  *
  * If tracing is not enabled, does nothing. */
+// for tracing 
 static void
 xlate_report_table(const struct xlate_ctx *ctx, struct rule_dpif *rule,
                    uint8_t table_id)
@@ -845,6 +1078,7 @@ xlate_report_table(const struct xlate_ctx *ctx, struct rule_dpif *rule,
  * reporting the value of subfield 'sf'.
  *
  * If tracing is not enabled, does nothing. */
+// for tracing 
 static void
 xlate_report_subfield(const struct xlate_ctx *ctx,
                       const struct mf_subfield *sf)
@@ -908,6 +1142,7 @@ xbridge_addr_create(struct xbridge *xbridge)
     struct netdev *dev;
     int err, n_addr = 0;
 
+    // 通过其底层 netedvice 的 callback 获得地址
     err = netdev_open(xbridge->name, NULL, &dev);
     if (!err) {
         err = netdev_get_addr_list(dev, &addr, &mask, &n_addr);
@@ -950,6 +1185,7 @@ xbridge_addr_unref(struct xbridge_addr *addr)
     }
 }
 
+// 配置 xbridge 咯
 static void
 xlate_xbridge_set(struct xbridge *xbridge,
                   struct dpif *dpif,
@@ -1014,6 +1250,7 @@ xlate_xbridge_set(struct xbridge *xbridge,
     xbridge->support = *support;
 }
 
+// 配置 xbundle 咯
 static void
 xlate_xbundle_set(struct xbundle *xbundle,
                   enum port_vlan_mode vlan_mode, uint16_t qinq_ethtype,
@@ -1044,6 +1281,7 @@ xlate_xbundle_set(struct xbundle *xbundle,
     }
 }
 
+// 配置 xport 咯
 static void
 xlate_xport_set(struct xport *xport, odp_port_t odp_port,
                 const struct netdev *netdev, const struct cfm *cfm,
@@ -1086,6 +1324,7 @@ xlate_xport_set(struct xport *xport, odp_port_t odp_port,
     }
 }
 
+// RCU 更新 xlate_cfg 的时候要从老的 cfg 里复制到新的 cfg 中
 static void
 xlate_xbridge_copy(struct xbridge *xbridge)
 {
@@ -1158,6 +1397,7 @@ xlate_xport_copy(struct xbridge *xbridge, struct xbundle *xbundle,
         }
     }
 
+    // xport 属于某个 xbundle 的时候, 就把 xport 插入到 xbundle 的 xports 中
     if (xbundle) {
         new_xport->xbundle = xbundle;
         ovs_list_insert(&new_xport->xbundle->xports, &new_xport->bundle_node);
@@ -1197,7 +1437,7 @@ xlate_txn_commit(void)
     struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
 
     ovsrcu_set(&xcfgp, new_xcfg);
-    ovsrcu_synchronize();
+    ovsrcu_synchronize(); // 阻塞式 RCU, 等待 reader 退出后, 释放 old cfg
     xlate_xcfg_free(xcfg);
     new_xcfg = NULL;
 }
@@ -1220,11 +1460,13 @@ xlate_txn_start(void)
     hmap_init(&new_xcfg->xports);
     hmap_init(&new_xcfg->xports_uuid);
 
+    // rcu ctx
     xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
     if (!xcfg) {
         return;
     }
 
+    // 复制老的 cfg
     HMAP_FOR_EACH (xbridge, hmap_node, &xcfg->xbridges) {
         xlate_xbridge_copy(xbridge);
     }
@@ -1251,8 +1493,8 @@ xlate_xcfg_free(struct xlate_cfg *xcfg)
     free(xcfg);
 }
 
-// 关键, 上层通过这个函数将 xlate 需要的 配置信息传递下来, xlate 层基于这些信息维护了 
-// xbridge / xport 等抽象
+// 更新这里的翻译层对 xbridge 的视图, 当上层(oproto_dpif 层)发生变化的时候
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
                   struct dpif *dpif,
@@ -1271,7 +1513,7 @@ xlate_ofproto_set(struct ofproto_dpif *ofproto, const char *name,
     ovs_assert(new_xcfg);
 
     xbridge = xbridge_lookup(new_xcfg, ofproto);
-    if (!xbridge) {
+    if (!xbridge) { // 不存在, 说明是新增的
         xbridge = xzalloc(sizeof *xbridge);
         xbridge->ofproto = ofproto;
 
@@ -1326,6 +1568,8 @@ xlate_xbridge_remove(struct xlate_cfg *xcfg, struct xbridge *xbridge)
     free(xbridge);
 }
 
+
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_remove_ofproto(struct ofproto_dpif *ofproto)
 {
@@ -1337,6 +1581,7 @@ xlate_remove_ofproto(struct ofproto_dpif *ofproto)
     xlate_xbridge_remove(new_xcfg, xbridge);
 }
 
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_bundle_set(struct ofproto_dpif *ofproto, struct ofbundle *ofbundle,
                  const char *name, enum port_vlan_mode vlan_mode,
@@ -1387,6 +1632,7 @@ xlate_xbundle_remove(struct xlate_cfg *xcfg, struct xbundle *xbundle)
     free(xbundle);
 }
 
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_bundle_remove(struct ofbundle *ofbundle)
 {
@@ -1398,6 +1644,7 @@ xlate_bundle_remove(struct ofbundle *ofbundle)
     xlate_xbundle_remove(new_xcfg, xbundle);
 }
 
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_ofport_set(struct ofproto_dpif *ofproto, struct ofbundle *ofbundle,
                  struct ofport_dpif *ofport, ofp_port_t ofp_port,
@@ -1497,6 +1744,7 @@ xlate_xport_remove(struct xlate_cfg *xcfg, struct xport *xport)
     free(xport);
 }
 
+// NOTE: 调用前先调用 xlate_txn_start(); 初始化了 new_xcfg 的
 void
 xlate_ofport_remove(struct ofport_dpif *ofport)
 {
@@ -1516,10 +1764,11 @@ xlate_ofport_remove(struct ofport_dpif *ofport)
  *    @backer
  *    @flow
  * OUT:
- *    @ofp_in_port: openflow port in port
+ *    @ofp_in_port: 入口 openflow port 号
  *    @xportp
  * */
 // XXX: 针对 tunnel port 和 recirculated packet 的特殊处理
+// pkt 查找: 确定报文属于哪个 bridge, 哪个 port
 static struct ofproto_dpif *
 xlate_lookup_ofproto_(const struct dpif_backer *backer,
                       const struct flow *flow,
@@ -1544,8 +1793,10 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
             return NULL;
         }
 
+	// 从保存的状态里直接恢复 xport
         ofp_port_t in_port = recirc_id_node->state.metadata.in_port;
         if (in_port != OFPP_NONE && in_port != OFPP_CONTROLLER) {
+		// 为什么保存的是 uuid 不是, xport 指针. 因为更新配置的时候 xport 会重新创建并复制, 指针会变化
             struct uuid xport_uuid = recirc_id_node->state.xport_uuid;
             xport = xport_lookup_by_uuid(xcfg, &xport_uuid);
             if (xport && xport->xbridge && xport->xbridge->ofproto) {
@@ -1578,8 +1829,12 @@ xlate_lookup_ofproto_(const struct dpif_backer *backer,
     //
     // 这里如果 flow 的 tunnel 被设置了, 肯定是 ingress tunnel 报文. 因为
     // output 方向的话, tunnel 是在 output tunnel action 设置的. 肯定是已经翻译了
+    //
+    // 对于隧道 port, datapath 的端口和 openflow 的隧道端口不是一一对一个的. 可能隧道地址, key 等信息才能确定 openflow 入口
+    //
+    // 比如: 一堆 vxlan port 其 datapath 的 port 都是 vxlan_sys_4789, 但是 openflow port 是不一样的.
     xport = xport_lookup(xcfg, tnl_port_should_receive(flow)
-                         ? tnl_port_receive(flow)
+                         ? tnl_port_receive(flow) /* 根据 flow 里的 隧道信息 进一步查找 datapath 逻辑 port */
                          : odp_port_to_ofport(backer, flow->in_port.odp_port));
     if (OVS_UNLIKELY(!xport)) {
         if (errorp) {
@@ -1610,6 +1865,7 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
 {
     const struct xport *xport;
 
+    // 主要就是找 pkt 对应的 xport, 还返回一个 openflow switch ofproto_dpif
     return xlate_lookup_ofproto_(backer, flow, ofp_in_port, &xport, errorp);
 }
 
@@ -1633,6 +1889,9 @@ xlate_lookup_ofproto(const struct dpif_backer *backer, const struct flow *flow,
  *    @sflow
  *    @netflow
  *    @ofp_in_port: flow 关联的 in port
+ *
+ *
+ * 就是调用: xlate_lookup_ofproto_
  * */
 int
 xlate_lookup(const struct dpif_backer *backer, const struct flow *flow,
@@ -1935,6 +2194,8 @@ group_is_alive(const struct xlate_ctx *ctx, uint32_t group_id, int depth)
 
 #define MAX_LIVENESS_RECURSION 128 /* Arbitrary limit */
 
+// 一个 openflow group 的 bucket 是否可用
+// refer: openflow spec 1.5.1 Ch5.10.2 Group Liveness Monitoring
 static bool
 bucket_is_alive(const struct xlate_ctx *ctx,
                 struct ofputil_bucket *bucket, int depth)
@@ -2055,6 +2316,7 @@ xbundle_includes_vlan(const struct xbundle *xbundle, const struct xvlan *xvlan)
     }
 }
 
+// 哪些 mirror 的 镜像 pkt 会送到这个 xbundle, 这个  bundler 应该是一个 mirror port
 static mirror_mask_t
 xbundle_mirror_out(const struct xbridge *xbridge, struct xbundle *xbundle)
 {
@@ -2063,6 +2325,7 @@ xbundle_mirror_out(const struct xbridge *xbridge, struct xbundle *xbundle)
         : 0;
 }
 
+// 从这个 bundler 接收 pkt 的时候, 触发哪些 mirror
 static mirror_mask_t
 xbundle_mirror_src(const struct xbridge *xbridge, struct xbundle *xbundle)
 {
@@ -2071,6 +2334,7 @@ xbundle_mirror_src(const struct xbridge *xbridge, struct xbundle *xbundle)
         : 0;
 }
 
+// pkt output 到 这个 bundle 时候, 会触发哪些 mirror
 static mirror_mask_t
 xbundle_mirror_dst(const struct xbridge *xbridge, struct xbundle *xbundle)
 {
@@ -2079,6 +2343,7 @@ xbundle_mirror_dst(const struct xbridge *xbridge, struct xbundle *xbundle)
         : 0;
 }
 
+// openflow port 号找, xbundle 咯
 static struct xbundle *
 lookup_input_bundle__(const struct xbridge *xbridge,
                       ofp_port_t in_port, struct xport **in_xportp)
@@ -2132,6 +2397,50 @@ lookup_input_bundle(const struct xlate_ctx *ctx,
 /* Mirrors the packet represented by 'ctx' to appropriate mirror destinations,
  * given the packet is ingressing or egressing on 'xbundle', which has ingress
  * or egress (as appropriate) mirrors 'mirrors'. */
+// mirror 处理, mirror 可能在 ingress 也可能在 egress. openflow 里没有直接的 mirror 概念的
+/* mirror 示例: 拓扑如下
+ *  主机 A ── p1 ── br0 ── p2 ── 主机 B
+ *                │
+ *               mon0
+ *                │
+ *              抓包设备
+ *
+ * 1. 添加 ingress mirror, 从 p1 出来的流量被 mirror
+ * sudo ovs-vsctl \
+ *   -- --id=@p get Port p1 \
+ *   -- --id=@out get Port mon0 \
+ *   -- --id=@m create Mirror name=mirror-p1-ingress \
+ *        select-src-port=@p \
+ *        output-port=@out \
+ *   -- add Bridge br0 mirrors @m
+ *                                                     
+ *                                                     
+ * A → p1 → OVS → p2 → B
+ *           └──────→ mon0
+ *                                                     
+ * 2. 添加 egress mirror, 通过 p1 发送的流量被 mirror
+ *                                                     
+ * 镜像 OVS → p1 方向：
+ *                                                     
+ * sudo ovs-vsctl \
+ *   -- --id=@p get Port p1 \
+ *   -- --id=@out get Port mon0 \
+ *   -- --id=@m create Mirror name=mirror-p1-egress \
+ *        select-dst-port=@p \
+ *        output-port=@out \
+ *   -- add Bridge br0 mirrors @m
+ *                                                     
+ *   
+ * B → p2 → OVS → p1 → A
+ *           └──────→ mon0
+ *
+ *
+ *
+ * xbundle: 是 mirror 源, 可能是 mirror 其 ingress/egress 流量
+ * mirrors 是 mirror 后的 pkt 要送到的 port
+ *
+ * 即 xbundle 的流量 mirror 到 mirrors 里. 要生成 datapath 的 action 的
+ * */
 static void
 mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
               mirror_mask_t mirrors)
@@ -2139,12 +2448,14 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
     struct xvlan in_xvlan;
     struct xvlan xvlan;
 
+    // 先处理 vlan
     /* Figure out what VLAN the packet is in (because mirrors can select
      * packets on basis of VLAN). */
     xvlan_extract(&ctx->xin->flow, &in_xvlan);
     if (!input_vid_is_valid(ctx, in_xvlan.v[0].vid, xbundle)) {
         return;
     }
+    // 提取 vlan 信息, 不同的 mode 有不同的
     xvlan_input_translate(xbundle, &in_xvlan, &xvlan);
 
     const struct xbridge *xbridge = ctx->xbridge;
@@ -2159,14 +2470,15 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
      * the candidates, adding the ones that really should be mirrored to
      * 'used_mirrors', as long as some candidates remain.  */
     mirror_mask_t used_mirrors = 0;
-    while (mirrors) {
+    while (mirrors) { // 逐个 mirror 处理
         const unsigned long *vlans;
-        mirror_mask_t dup_mirrors;
+        mirror_mask_t dup_mirrors; // 这里避免无限镜像循环下去. 
         struct ofbundle *out;
         int out_vlan;
         int snaplen;
 
         /* Get the details of the mirror represented by the rightmost 1-bit. */
+	// 获取 mirror 配置
         ovs_assert(mirror_get(xbridge->mbridge, raw_ctz(mirrors),
                               &vlans, &dup_mirrors,
                               &out, &snaplen, &out_vlan));
@@ -2193,12 +2505,12 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         ctx->mirror_snaplen = snaplen;
 
         /* Send the packet to the mirror. */
-        if (out) {
+        if (out) { // pkt 要送到这个 port
             struct xbundle *out_xbundle = xbundle_lookup(ctx->xcfg, out);
             if (out_xbundle) {
                 output_normal(ctx, out_xbundle, &xvlan);
             }
-        } else if (xvlan.v[0].vid != out_vlan
+        } else if (xvlan.v[0].vid != out_vlan /* 镜像到指定 vlan, 这个 vlan 不能是原始 vlan */
                    && !eth_addr_is_reserved(ctx->xin->flow.dl_dst)) {
             struct xbundle *xb;
             uint16_t old_vid = xvlan.v[0].vid;
@@ -2207,10 +2519,10 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
             LIST_FOR_EACH (xb, list_node, &xbridge->xbundles) {
                 if (xbundle_includes_vlan(xb, &xvlan)
                     && !xbundle_mirror_out(xbridge, xb)) {
-                    output_normal(ctx, xb, &xvlan);
+                    output_normal(ctx, xb, &xvlan); // 这个vlan 里的所有 port 都要送一份
                 }
             }
-            xvlan.v[0].vid = old_vid;
+            xvlan.v[0].vid = old_vid; // 恢复下 vlan id
         }
 
         /* output_normal() could have recursively output (to different
@@ -2219,7 +2531,7 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
         ctx->mirror_snaplen = 0;
     }
 
-    if (used_mirrors) {
+    if (used_mirrors) { // 做些统计
         if (ctx->xin->resubmit_stats) {
             mirror_update_stats(xbridge->mbridge, used_mirrors,
                                 ctx->xin->resubmit_stats->n_packets,
@@ -2236,7 +2548,7 @@ mirror_packet(struct xlate_ctx *ctx, struct xbundle *xbundle,
 }
 
 /* 调用这个函数后, 不是无条件 mirror 的还是 要看 bridge 是不是开启了
- *
+ * ingress mirror 处理
  * */
 static void
 mirror_ingress_packet(struct xlate_ctx *ctx)
@@ -2315,6 +2627,7 @@ xvlan_copy(struct xvlan *dst, const struct xvlan *src)
     *dst = *src;
 }
 
+// pop 一个 vlan 头
 static void
 xvlan_pop(struct xvlan *src)
 {
@@ -2323,6 +2636,7 @@ xvlan_pop(struct xvlan *src)
            sizeof(src->v[FLOW_MAX_VLAN_HEADERS - 1]));
 }
 
+// 添加一个 vlan 头
 static void
 xvlan_push_uninit(struct xvlan *src)
 {
@@ -2348,6 +2662,7 @@ xvlan_extract(const struct flow *flow, struct xvlan *xvlan)
 }
 
 /* Put VLAN information (headers) to flow */
+// flow 里添加 vlan 信息
 static void
 xvlan_put(struct flow *flow, const struct xvlan *xvlan,
           enum port_priority_tags_mode use_priority_tags)
@@ -2370,6 +2685,7 @@ xvlan_put(struct flow *flow, const struct xvlan *xvlan,
 /* Given 'in_xvlan', extracted from the input 802.1Q headers received as part
  * of a packet, and 'in_xbundle', the bundle on which the packet was received,
  * returns the VLANs of the packet during bridge internal processing. */
+// 根据 port 模式来解释 in_xvlan
 static void
 xvlan_input_translate(const struct xbundle *in_xbundle,
                       const struct xvlan *in_xvlan, struct xvlan *xvlan)
@@ -2420,24 +2736,24 @@ xvlan_output_translate(const struct xbundle *out_xbundle,
                        const struct xvlan *xvlan, struct xvlan *out_xvlan)
 {
     switch (out_xbundle->vlan_mode) {
-    case PORT_VLAN_ACCESS:
+    case PORT_VLAN_ACCESS: // acesss 口, 出去不会额外打 vlan 的. 考虑物理交换机行为
         memset(out_xvlan, 0, sizeof(*out_xvlan));
         break;
 
     case PORT_VLAN_TRUNK:
-    case PORT_VLAN_NATIVE_TAGGED:
+    case PORT_VLAN_NATIVE_TAGGED: // 报文里是什么 vlan 就用什么 vlan
         xvlan_copy(out_xvlan, xvlan);
         break;
 
     case PORT_VLAN_NATIVE_UNTAGGED:
         xvlan_copy(out_xvlan, xvlan);
-        if (xvlan->v[0].vid == out_xbundle->vlan) {
+        if (xvlan->v[0].vid == out_xbundle->vlan) { // 报文里的 vlan 如果是 port native vlan, 那么移除, 否则保留
             xvlan_pop(out_xvlan);
         }
         break;
 
     case PORT_VLAN_DOT1Q_TUNNEL:
-        xvlan_copy(out_xvlan, xvlan);
+        xvlan_copy(out_xvlan, xvlan); // 移除外部 provider vlan
         xvlan_pop(out_xvlan);
         break;
 
@@ -2447,6 +2763,7 @@ xvlan_output_translate(const struct xbundle *out_xbundle,
 }
 
 /* If output xbundle is dot1q-tunnel, set mask bits of cvlan */
+// cvlan 不支持 wildcard 么?
 static void
 check_and_set_cvlan_mask(struct flow_wildcards *wc,
                          const struct xbundle *xbundle)
@@ -2456,6 +2773,12 @@ check_and_set_cvlan_mask(struct flow_wildcards *wc,
     }
 }
 
+/* 重要: 处理 normal output 动作(L2 行为)的, 此时 output port 已经确定, 不会查 mac 表了.
+ * - vlan 处理
+ * - member port 选择
+ * - datpath action
+ *
+ * */
 static void
 output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
               const struct xvlan *xvlan)
@@ -2467,8 +2790,14 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
     bool use_recirc = false;
     struct xvlan out_xvlan;
 
+    // 如果 pkt 里有 cvlan, 要特别对这个做精确匹配.
+    // 这里是 normal output, 是 L2 switch 行为
+    //
+    // XXX: ctx->wc
     check_and_set_cvlan_mask(ctx->wc, out_xbundle);
 
+    // 不同 模式, 对 pkt vlan 的处理有区别
+    // switch output pkt 到某个 port 的时候, 根据 port 的 vlan mode, 可能要剥离 vlan heder 的
     xvlan_output_translate(out_xbundle, xvlan, &out_xvlan);
     if (out_xbundle->use_priority_tags) {
         out_xvlan.v[0].pcp = ntohs(ctx->xin->flow.vlans[0].tci) &
@@ -2477,6 +2806,7 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
     vid = out_xvlan.v[0].vid;
     if (ovs_list_is_empty(&out_xbundle->xports)) {
         /* Partially configured bundle with no members.  Drop the packet. */
+	// Q: 不需要 drop action 么?
         return;
     } else if (!out_xbundle->bond) {
         xport = CONTAINER_OF(ovs_list_front(&out_xbundle->xports), struct xport,
@@ -2485,10 +2815,11 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
         struct flow_wildcards *wc = ctx->wc;
         struct ofport_dpif *ofport;
 
-        if (ctx->xbridge->support.odp.recirc) {
+        if (ctx->xbridge->support.odp.recirc) { // 表示数据面支持 recirc
             /* In case recirculation is not actually in use, 'xr.recirc_id'
              * will be set to '0', since a valid 'recirc_id' can
              * not be zero.  */	// 是说从 这个函数返回后 recirc_id 的值
+		// 有点 bond 需要 recirculation 么支持, 这里搞一个 recirc_id 和 hash_basis 出来
             bond_update_post_recirc_rules(out_xbundle->bond,
                                           &xr.recirc_id,
                                           &xr.hash_basis);
@@ -2501,6 +2832,9 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
             }
         }
 
+	// XXX: ctx->wc
+	// bond 口在 openflow 里没有 ofport 的, 这里选择成员后才有 openflow port no
+	// 如果走了 recirc_id 路径, 这里的 wc 就是 NULL, 
         ofport = bond_choose_output_member(out_xbundle->bond,
                                            &ctx->xin->flow, wc, vid);
         xport = xport_lookup(ctx->xcfg, ofport);
@@ -2512,7 +2846,7 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
 
         /* If use_recirc is set, the main thread will handle stats
          * accounting for this bond. */
-        if (!use_recirc) {
+        if (!use_recirc) { // 什么时候不使用? 更新一些统计信息
             if (ctx->xin->resubmit_stats) {
                 bond_account(out_xbundle->bond, &ctx->xin->flow, vid,
                              ctx->xin->resubmit_stats->n_bytes);
@@ -2530,11 +2864,17 @@ output_normal(struct xlate_ctx *ctx, const struct xbundle *out_xbundle,
         }
     }
 
+    // XXX: ctx->xin->flow.vlans
+    // flow 里的 vlan 保存起来
     memcpy(&old_vlans, &ctx->xin->flow.vlans, sizeof(old_vlans));
+    // XXX: ctx->xin->flow
+    // vlan 信息填充到 flow 里
     xvlan_put(&ctx->xin->flow, &out_xvlan, out_xbundle->use_priority_tags);
 
+    // cxt->odp_actions
     compose_output_action(ctx, xport->ofp_port, use_recirc ? &xr : NULL,
                           false, false);
+    // 恢复之前的 vlan, 让其继续去匹配后续的 openflow 翻译
     memcpy(&ctx->xin->flow.vlans, &old_vlans, sizeof(old_vlans));
 }
 
@@ -2580,6 +2920,8 @@ is_gratuitous_arp(const struct flow *flow, struct flow_wildcards *wc)
  * May also add tags to '*tags', although the current implementation only does
  * so in one special case.
  */
+// switch 从 port 收到 pkt 后, 判断是否可以进一步做 MAC learning 和 forwarding
+// 还是针对 NORMAL action 的
 static bool
 is_admissible(struct xlate_ctx *ctx, struct xport *in_port,
               uint16_t vlan)
@@ -2596,7 +2938,7 @@ is_admissible(struct xlate_ctx *ctx, struct xport *in_port,
         return false;
     }
 
-    if (in_xbundle->bond) {
+    if (in_xbundle->bond) { // bond 口收到的多一点检查, 比如: Active-backup 模式下, 应该从 active port 进入的
         struct mac_entry *mac;
 
         switch (bond_check_admissibility(in_xbundle->bond, in_port->ofport,
@@ -2962,18 +3304,21 @@ xlate_normal_mcast_send_rports(struct xlate_ctx *ctx,
     }
 }
 
+// 这是 Normal action 中的 flood
+// 不是 OFPP_FLOOD, 那是 flood_packets 路径
 static void
 xlate_normal_flood(struct xlate_ctx *ctx, struct xbundle *in_xbundle,
                    struct xvlan *xvlan)
 {
     struct xbundle *xbundle;
 
+    // 检查后, 将其 flood 到可以 flood 的 port
     LIST_FOR_EACH (xbundle, list_node, &ctx->xbridge->xbundles) {
         if (xbundle != in_xbundle
             && xbundle->ofbundle != in_xbundle->ofbundle
             && xbundle_includes_vlan(xbundle, xvlan)
             && xbundle->floodable
-            && !xbundle_mirror_out(ctx->xbridge, xbundle)) {
+            && !xbundle_mirror_out(ctx->xbridge, xbundle)) { /* 排除 mirror 专用的 port */
             output_normal(ctx, xbundle, xvlan);
         }
     }
@@ -2996,6 +3341,9 @@ is_ip_local_multicast(const struct flow *flow, struct flow_wildcards *wc)
 
 // ref: man ovs-actions#The_OVS_Normal_Pipeline
 // openflow 中的 `output:normal` action 就是将 pkt 送到 normal switch 的 pipeline, 也就是这个函数做的翻译咯
+//
+//
+// NORMAL action, 即 L2 行为
 static void
 xlate_normal(struct xlate_ctx *ctx)
 {
@@ -4170,6 +4518,7 @@ terminate_native_tunnel(struct xlate_ctx *ctx, struct flow *flow,
     return *tnl_port != ODPP_NONE;
 }
 
+// 针对 bond recirc 场景, 生成的 action 是 hash + recirc(R)
 static void
 compose_output_action__(struct xlate_ctx *ctx, ofp_port_t ofp_port,
                         const struct xlate_bond_recirc *xr, bool check_stp,

@@ -133,6 +133,7 @@ struct bond {
     int rebalance_interval;      /* Interval between rebalances, in ms. */
     long long int next_rebalance; /* Next rebalancing time. */
     bool send_learning_packets;
+    // 每个 bond 口只能有一个 recirc_id
     uint32_t recirc_id;          /* Non zero if recirculation can be used.*/
     struct hmap pr_rule_ops;     /* Helps to maintain post recirculation rules.*/
 
@@ -1060,7 +1061,7 @@ bond_update_post_recirc_rules__(struct bond* bond, const bool force)
    }
 
    if (update_rules) {
-        update_recirc_rules(bond);	// 这里面创建了 tx_bond 结构, 后面数据面会shying
+        update_recirc_rules(bond);	// 这里面创建了 tx_bond 结构, 后面数据面会使用
    }
 }
 
@@ -1068,7 +1069,7 @@ void
 bond_update_post_recirc_rules(struct bond *bond, uint32_t *recirc_id,
                               uint32_t *hash_basis)
 {
-    bool may_recirc = bond_may_recirc(bond);
+    bool may_recirc = bond_may_recirc(bond); // 根据 bond 口的配置来决定
 
     if (may_recirc) {
         /* To avoid unnecessary locking, bond_may_recirc() is first
