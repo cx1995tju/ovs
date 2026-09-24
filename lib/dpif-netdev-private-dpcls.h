@@ -58,7 +58,7 @@ struct netdev_flow_key {
 //    * smc 不需要回收, 仅仅是一个 megaflow 的 cache 层, megaflow 删除后, 后面就算找到别的 flow, 无非就是匹配不上罢了
  
 //  即是 megaflow，也被用来表达 mask + key 的概念。
-struct dpcls_rule {
+struct dpcls_rule { // 608
     struct cmap_node cmap_node;   /* Within struct dpcls_subtable 'rules'. */
     struct netdev_flow_key *mask; /* Subtable's mask. */ // 因为相同 mask 的 flow组织在同一个 subtable 里(dpcls_subtable), 所以 mask 是一个 per-subtable 的值, 通过指针指过去就好了
     struct netdev_flow_key flow;  /* Matching key. */
@@ -80,7 +80,7 @@ uint32_t (*dpcls_subtable_lookup_func)(struct dpcls_subtable *subtable,
 /* A set of rules that all have the same fields wildcarded. */
 // 组织 megaflow(i.e. dpcls_rule) 的表, 即具有相同 mask 的 megaflow 组织在一起
 // ref: dpcls_create_subtable
-struct dpcls_subtable {
+struct dpcls_subtable { // 640B
     /* The fields are only used by writers. */
     struct cmap_node cmap_node OVS_GUARDED; /* Within dpcls 'subtables_map'. */
 

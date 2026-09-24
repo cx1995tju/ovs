@@ -2336,7 +2336,7 @@ dp_netdev_pmd_find_dpcls(struct dp_netdev_pmd_thread *pmd,
 
     if (!cls) {
         /* Create new classifier for in_port */
-        cls = xmalloc(sizeof(*cls));
+        cls = xmalloc(sizeof(*cls)); // 40B
         dpcls_init(cls);
         cls->in_port = in_port;
         cmap_insert(&pmd->classifiers, &cls->node, hash);

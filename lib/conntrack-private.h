@@ -115,7 +115,7 @@ enum OVS_PACKED_ENUM ct_conn_type {
 // nat_conn:
 // - key: B->A
 // - rev_key: A->C
-struct conn {
+struct conn { // 320B
     /* Immutable data. */
     struct conn_key key; // 5-tuple, ref: conn_not_found
     struct conn_key rev_key; // 做 lookup 的时候, 不仅仅用 key 来 look, 也用 rev_key 来 look_up
