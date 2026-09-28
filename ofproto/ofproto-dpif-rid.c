@@ -272,6 +272,7 @@ recirc_find_id(const struct frozen_state *target)
 
 /* Allocate a unique recirculation id for the given set of flow metadata and
    optional actions. */
+// 0 是一个特殊的 id, 表示没有关联某个冻结的 ctx
 uint32_t
 recirc_alloc_id_ctx(const struct frozen_state *state)
 {

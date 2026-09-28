@@ -139,6 +139,13 @@ struct xc_entry {
 // 缓存一些统计/状态. revalidator 线程会使用
 // 记录了 revalidator 将各种统计和信息要发送给谁
 // revalidator 遍历所有的 xlate_cache, 就可以完成传输
+//
+// 缓存:
+// 1. rule 向的统计
+// 2. mac 学习信息
+// 3. bond 信息
+// 4. mirror 相关
+// 5. learn side effects
 struct xlate_cache {
     struct ofpbuf entries;
 };

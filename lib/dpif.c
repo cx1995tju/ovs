@@ -765,7 +765,7 @@ dpif_port_get_pid(const struct dpif *dpif, odp_port_t port_no)
 {
     return (dpif->dpif_class->port_get_pid
             ? (dpif->dpif_class->port_get_pid)(dpif, port_no)
-            : 0);
+            : 0); // OVS-DPDK 里没有
 }
 
 /* Looks up port number 'port_no' in 'dpif'.  On success, returns 0 and copies
@@ -1669,6 +1669,8 @@ int
 dpif_queue_to_priority(const struct dpif *dpif, uint32_t queue_id,
                        uint32_t *priority)
 {
+    // dpif_netdev_queue_to_priority
+    //
     int error = (dpif->dpif_class->queue_to_priority
                  ? dpif->dpif_class->queue_to_priority(dpif, queue_id,
                                                        priority)

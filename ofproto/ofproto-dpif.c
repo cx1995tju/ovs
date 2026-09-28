@@ -4215,6 +4215,7 @@ ofproto_dpif_set_packet_odp_port(const struct ofproto_dpif *ofproto,
     packet->md.in_port.odp_port = ofp_port_to_odp_port(ofproto, in_port);
 }
 
+// 翻译后, 直接在控制面就执行 action 了
 int
 ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
                                ovs_version_t version, const struct flow *flow,

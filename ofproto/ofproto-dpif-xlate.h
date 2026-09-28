@@ -60,7 +60,7 @@ struct xlate_out {
      */
     // 非 0 时 表示返回的 翻译后的 flow 其中的 action 会将 pkt 再次引导到慢速路径处理(send-to-userspace action)
     // 这里记录了原因.
-    enum slow_path_reason slow;
+    enum slow_path_reason slow; // ref: process_special
     // revalidate 的时候, 因为没有实际的 pkt, 不能执行 learn 这样 action 的副作用, 那么这里就不安装 datapath flow
     // 等到实际报文来的时候, 再重新 upcall 学习咯
     bool avoid_caching; // 这里为 true , 则不会安装 datapath flow

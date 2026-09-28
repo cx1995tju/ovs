@@ -1929,7 +1929,7 @@ parse_flow_actions(struct netdev *netdev,
                 return -1;
             }
 #endif
-        } else {
+        } else { // 不能有 recirc action
             VLOG_DBG_RL(&rl, "Unsupported action type %d", nl_attr_type(nla));
             return -1;
         }

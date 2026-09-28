@@ -8576,6 +8576,7 @@ odp_put_push_nsh_action(struct ofpbuf *odp_actions,
     nl_msg_end_nested(odp_actions, offset);
 }
 
+// 这里不是 vxlan 这种隧道, 而是: ethernet / NSH 头
 static void
 commit_encap_decap_action(const struct flow *flow,
                           struct flow *base_flow,
@@ -8632,6 +8633,7 @@ commit_encap_decap_action(const struct flow *flow,
         }
     }
 
+    // packet_type 是精确匹配, 因为前面设置的 action 显然只能针对特定的 packet_type
     wc->masks.packet_type = OVS_BE32_MAX;
 }
 
@@ -8639,8 +8641,8 @@ commit_encap_decap_action(const struct flow *flow,
  * 'base' and 'flow', appends ODP actions to 'odp_actions' that change the flow
  * key from 'base' into 'flow', and then changes 'base' the same way.  Does not
  * commit set_tunnel actions.  Users should call commit_odp_tunnel_action()
- * in addition to this function if needed.  Sets fields in 'wc' that are	// 对应 bit 设置为 1
- * used as part of the action.
+ * in addition to this function if needed.  Sets fields in 'wc' that are
+ * // 对应 bit 设置为 1 used as part of the action.
  *
  * In the common case, this function returns 0.  If the flow key modification
  * requires the flow's packets to be forced into the userspace slow path, this
@@ -8651,10 +8653,36 @@ commit_encap_decap_action(const struct flow *flow,
  * flushed to userspace and handled there, which works OK but much more slowly
  * than if the datapath handled it directly.)
  *
- * 通过 比较 flow 和 base 的区别, 知道前面的翻译过程中, 哪些字段需要修改. 这样这里将其转换为 datapath 的 action
- * 提交到 odp_actions 里
+ * 通过 比较 flow 和 base 的区别, 知道前面的翻译过程中, 哪些字段需要修改.
+ * 这样这里将其转换为 datapath 的 action 提交到 odp_actions 里
  *
  * 然后 更新 base 得到新的 base, 后续 commit 的时候才不会重复
+ *
+ *
+ *
+ * 关于 flow 和 base_flow
+ * 1. 有些 aciton 的翻译会直接向 odp_actions 里 push datapath action
+ * 2. 有些 aciton 的会向将对报文的修改以 flow 的形式来表达,
+ * 然后在合适的时候通过比较 base_flow 和 flow 的区别, 来翻译 aciton.
+ * 这样的好处是可以对 action 做一些折叠 并不会对齐所有的 action 的
+ *
+ *
+ * use_masked: 表示底层 datapath 是否支持 bit 修改
+ * pending_encap: 表示当前是否有 encap 操作未提交
+ * pending_decap: 表示当前是否有 decap 操作未提交
+ * encap_data: 表示当前有 encap 操作未提交的数据
+ *
+ *
+ *
+ * 为什么 commit 的时候还要更新 wc ?
+ * 考虑 datapath 不支持 SET_MASKED 的情况:
+ * - base_flow: src=A, dst=B
+ * - flow:      src=A, dst=C
+ * - wc->masks.dl_src = 0, 表示不匹配 smac
+ *
+ * 我们需要将 dmac 从 B 改成 C, 但是不支持 SET_MASKED, 那么 action 就是 src=A,
+ * dst=C. 同时需要修改 smac. 这时候我们必须收紧 wc->masks.dl_src 来保证匹配安全,
+ * 否则 smac 就被错误的修改了.
  * */
 enum slow_path_reason
 commit_odp_actions(const struct flow *flow, struct flow *base,
@@ -8662,6 +8690,7 @@ commit_odp_actions(const struct flow *flow, struct flow *base,
                    bool use_masked, bool pending_encap, bool pending_decap,
                    struct ofpbuf *encap_data)
 {
+	// 顺序是有讲究的
     /* If you add a field that OpenFlow actions can change, and that is visible
      * to the datapath (including all data fields), then you should also add
      * code here to commit changes to the field. */

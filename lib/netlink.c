@@ -484,6 +484,9 @@ nl_msg_push_string(struct ofpbuf *msg, uint16_t type, const char *value)
  * the content for the nested Netlink attribute to 'msg' (e.g. using the other
  * nl_msg_*() functions), and then pass the returned offset to
  * nl_msg_end_nested() to finish up the nested attributes. */
+// start_nested 和 end_nested 是一对对应的, 两个调用之间是一个 tlv. 在之间使用 各种 push 函数去放入 tlv 中
+//
+// 当然 tlv 可以嵌套, 所以这里也可以嵌套调用
 size_t
 nl_msg_start_nested(struct ofpbuf *msg, uint16_t type)
 {
